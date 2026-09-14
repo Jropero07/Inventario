@@ -113,9 +113,8 @@ tbody tr:hover{background:#fafcff}
 .order-controls .span-2{grid-column:span 2}.order-controls textarea{resize:vertical}
 .order-preview-wrap{background:#e8edf3;padding:25px;overflow:auto}
 .order-paper{width:800px;min-height:1000px;background:#fff;margin:0 auto;padding:38px 42px;color:#172033;box-shadow:0 8px 25px rgba(0,0,0,.12);font-family:Arial,Helvetica,sans-serif}
-.order-header{display:grid;grid-template-columns:85px 1fr 105px;gap:14px;align-items:center;border-bottom:2px solid #173f8a;padding-bottom:14px}
-.logo-placeholder{height:70px;border:2px dashed #9aa6b8;display:grid;place-items:center;font-weight:900;font-size:13px;color:#66748a}
-.institution{text-align:center}.institution h1{font-size:15px;margin:0}.institution h2{font-size:11px;margin:4px 0;font-weight:800}.institution p{font-size:10px;margin:6px 0 0}
+.order-header{display:grid;grid-template-columns:1fr 105px;gap:20px;align-items:center;border-bottom:2px solid #173f8a;padding-bottom:14px}
+.institution{text-align:left}.institution h1{font-size:15px;margin:0}.institution h2{font-size:11px;margin:4px 0;font-weight:800}.institution p{font-size:10px;margin:6px 0 0}
 .folio-box{border:1px solid #bfc8d5;text-align:center}.folio-box span{display:block;background:#173f8a;color:#fff;font-size:9px;padding:4px;font-weight:800}.folio-box strong{display:block;font-size:11px;padding:7px 2px 2px}.folio-box small{display:block;font-size:8px;padding-bottom:6px}
 .order-data-grid{display:grid;grid-template-columns:1fr 1fr;border:1px solid #cfd7e2;border-bottom:0;margin-top:18px}
 .order-data-grid div{padding:9px 10px;border-right:1px solid #cfd7e2;border-bottom:1px solid #cfd7e2}.order-data-grid div:nth-child(even){border-right:0}
@@ -151,3 +150,6 @@ tbody tr:hover{background:#fafcff}
 
 /* IMPORTANTE: un modal oculto debe permanecer realmente oculto. */
 .modal-backdrop[hidden]{display:none!important}
+
+.modal-backdrop[hidden]{display:none!important}
+.storage-status.online .status-dot{background:#22a06b}.storage-status.error .status-dot{background:#d92d20}.storage-status{transition:color .2s ease}

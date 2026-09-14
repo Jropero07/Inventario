@@ -1,12 +1,29 @@
 /* =========================================================
    SISTEMA DE CONTROL E INVENTARIO
-   app.js - lógica completa sin backend
+   app.js - Firebase Realtime Database + interfaz
    ========================================================= */
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js";
+import { getDatabase, ref, push, set, onValue, remove } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyB-FX1wyTkycQ-21QRDf5VWy5p9N__ZNl8",
+  authDomain: "inventario-app-dfead.firebaseapp.com",
+  databaseURL: "https://inventario-app-dfead-default-rtdb.firebaseio.com",
+  projectId: "inventario-app-dfead",
+  storageBucket: "inventario-app-dfead.firebasestorage.app",
+  messagingSenderId: "1012268791157",
+  appId: "1:1012268791157:web:e2be525efa0cc13c318f3c"
+};
+
+const app = initializeApp(firebaseConfig);
+const dbFirebase = getDatabase(app);
+const inventarioRef = ref(dbFirebase, "inventario");
+const configuracionRef = ref(dbFirebase, "configuracion");
 
 (() => {
   "use strict";
 
-  const STORAGE_KEY = "inventarioTI_v1";
   const todayISO = () => new Date().toISOString().slice(0,10);
 
   const defaultDB = {
@@ -15,47 +32,20 @@
     meta: { nextOrderNumber: 1 }
   };
 
-  let db = loadDB();
+  let db = structuredClone(defaultDB);
   let currentTab = "assets";
   let editingAssetId = null;
   let editingConsumableId = null;
+  let firebaseReady = false;
 
   const $ = id => document.getElementById(id);
   const normalize = value => String(value ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
-  function loadDB() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return structuredClone(defaultDB);
-      const parsed = JSON.parse(raw);
-      return {
-        assets: Array.isArray(parsed.assets) ? parsed.assets : [],
-        consumables: Array.isArray(parsed.consumables) ? parsed.consumables : [],
-        meta: { ...defaultDB.meta, ...(parsed.meta || {}) }
-      };
-    } catch {
-      return structuredClone(defaultDB);
-    }
-  }
-
-  function saveDB() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
-  }
-
-  function uid(prefix) {
-    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-  }
-
-  function formatDate(date) {
-    if (!date) return "—";
-    const [y,m,d] = date.split("-");
-    return y && m && d ? `${d}/${m}/${y}` : date;
-  }
-
-  function escapeHTML(value) {
-    return String(value ?? "").replace(/[&<>"']/g, c => ({
-      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
-    }[c]));
+  function setConnectionStatus(message, type = "") {
+    const status = document.querySelector(".storage-status");
+    if (!status) return;
+    status.className = `storage-status ${type}`;
+    status.innerHTML = `<span class="status-dot"></span> ${escapeHTML(message)}`;
   }
 
   function showToast(message, type="") {
@@ -197,7 +187,6 @@
     renderAssets();
     renderConsumables();
     renderAlerts();
-    saveDB();
   }
 
   function switchTab(tab) {
@@ -262,30 +251,79 @@
     $("consumableName").focus();
   }
 
-  function deleteAsset(id) {
+  function assetFirebaseData(item) {
+    return {
+      recordType: "asset",
+      brand: item.brand,
+      model: item.model,
+      serial: item.serial,
+      entryDate: item.entryDate,
+      exitDate: item.exitDate || "",
+      status: item.status,
+      responsible: item.responsible || ""
+    };
+  }
+
+  function consumableFirebaseData(item) {
+    return {
+      recordType: "consumable",
+      name: item.name,
+      category: item.category,
+      unit: item.unit,
+      entryDate: item.entryDate,
+      stock: Number(item.stock),
+      minStock: Number(item.minStock)
+    };
+  }
+
+  // Hacer disponibles globalmente las funciones solicitadas para guardar y eliminar en Firebase.
+  window.guardarItemFirebase = function(itemData, idFirebase = null) {
+    const targetRef = idFirebase ? ref(dbFirebase, `inventario/${idFirebase}`) : push(inventarioRef);
+    return set(targetRef, itemData);
+  };
+
+  window.eliminarItemFirebase = function(idFirebase) {
+    return remove(ref(dbFirebase, `inventario/${idFirebase}`));
+  };
+
+  window.actualizarConfiguracionFirebase = function(data) {
+    return set(configuracionRef, data);
+  };
+
+  async function deleteAsset(id) {
     const a = db.assets.find(x => x.id === id);
     if (!a || !confirm(`¿Eliminar el activo con serial "${a.serial}"?`)) return;
-    db.assets = db.assets.filter(x => x.id !== id);
-    renderAll();
-    showToast("Activo eliminado.", "success");
+    try {
+      await window.eliminarItemFirebase(a.idFirebase || id);
+      showToast("Activo eliminado.", "success");
+    } catch (err) {
+      console.error(err);
+      showToast("No fue posible eliminar el activo en Firebase.", "error");
+    }
   }
 
-  function deleteConsumable(id) {
+  async function deleteConsumable(id) {
     const c = db.consumables.find(x => x.id === id);
     if (!c || !confirm(`¿Eliminar "${c.name}" del inventario?`)) return;
-    db.consumables = db.consumables.filter(x => x.id !== id);
-    renderAll();
-    showToast("Consumible eliminado.", "success");
+    try {
+      await window.eliminarItemFirebase(c.idFirebase || id);
+      showToast("Consumible eliminado.", "success");
+    } catch (err) {
+      console.error(err);
+      showToast("No fue posible eliminar el consumible en Firebase.", "error");
+    }
   }
 
-  $("assetForm").addEventListener("submit", e => {
+  $("assetForm").addEventListener("submit", async e => {
     e.preventDefault();
+    if (!firebaseReady) return showToast("Firebase todavía no está listo. Intenta nuevamente.", "error");
+
     const serial = $("assetSerial").value.trim();
     const duplicate = db.assets.some(a => normalize(a.serial) === normalize(serial) && a.id !== editingAssetId);
     if (duplicate) return showToast("El número de serie debe ser único.", "error");
 
     const item = {
-      id: editingAssetId || uid("asset"),
+      id: editingAssetId || null,
       brand: $("assetBrand").value.trim(),
       model: $("assetModel").value.trim(),
       serial,
@@ -294,26 +332,27 @@
       status: $("assetStatus").value,
       responsible: $("assetResponsible").value.trim()
     };
-    if (editingAssetId) {
-      const index = db.assets.findIndex(a => a.id === editingAssetId);
-      db.assets[index] = item;
-      showToast("Activo actualizado.", "success");
-    } else {
-      db.assets.push(item);
-      showToast("Activo registrado.", "success");
+
+    try {
+      await window.guardarItemFirebase(assetFirebaseData(item), editingAssetId);
+      resetAssetForm();
+      showToast(editingAssetId ? "Activo actualizado en tiempo real." : "Activo registrado en tiempo real.", "success");
+    } catch (err) {
+      console.error(err);
+      showToast("No fue posible guardar el activo en Firebase.", "error");
     }
-    resetAssetForm();
-    renderAll();
   });
 
-  $("consumableForm").addEventListener("submit", e => {
+  $("consumableForm").addEventListener("submit", async e => {
     e.preventDefault();
+    if (!firebaseReady) return showToast("Firebase todavía no está listo. Intenta nuevamente.", "error");
+
     const stock = Number($("consumableStock").value);
     const minStock = Number($("consumableMin").value);
     if (stock < 0 || minStock < 0) return showToast("El stock no puede ser negativo.", "error");
 
     const item = {
-      id: editingConsumableId || uid("cons"),
+      id: editingConsumableId || null,
       name: $("consumableName").value.trim(),
       category: $("consumableCategory").value.trim(),
       unit: $("consumableUnit").value.trim(),
@@ -321,16 +360,15 @@
       stock,
       minStock
     };
-    if (editingConsumableId) {
-      const index = db.consumables.findIndex(c => c.id === editingConsumableId);
-      db.consumables[index] = item;
-      showToast("Consumible actualizado.", "success");
-    } else {
-      db.consumables.push(item);
-      showToast("Consumible registrado.", "success");
+
+    try {
+      await window.guardarItemFirebase(consumableFirebaseData(item), editingConsumableId);
+      resetConsumableForm();
+      showToast(editingConsumableId ? "Consumible actualizado en tiempo real." : "Consumible registrado en tiempo real.", "success");
+    } catch (err) {
+      console.error(err);
+      showToast("No fue posible guardar el consumible en Firebase.", "error");
     }
-    resetConsumableForm();
-    renderAll();
   });
 
   $("assetForm").addEventListener("reset", () => setTimeout(() => {
@@ -447,9 +485,14 @@
     if (e.key === "Escape" && !$("orderModal").hidden) closeOrderModal();
   });
 
-  function markOrderUsed() {
-    db.meta.nextOrderNumber = Number(db.meta.nextOrderNumber || 1) + 1;
-    saveDB();
+  async function markOrderUsed() {
+    const nextNumber = Number(db.meta.nextOrderNumber || 1) + 1;
+    try {
+      await window.actualizarConfiguracionFirebase({ nextOrderNumber: nextNumber });
+    } catch (err) {
+      console.error(err);
+      showToast("La orden se generó, pero no se pudo actualizar el consecutivo.", "error");
+    }
   }
 
   async function downloadOrderPDF() {
@@ -467,8 +510,8 @@
     };
     try {
       await html2pdf().set(options).from(paper).save();
-      markOrderUsed();
-      showToast("Orden PDF generada.", "success");
+      await markOrderUsed();
+      showToast("PDF generado correctamente.", "success");
     } catch (err) {
       console.error(err);
       showToast("No fue posible generar el PDF.", "error");
@@ -477,58 +520,38 @@
 
   async function downloadOrderWord() {
     if (!currentOrder) return;
-    if (!window.docx || typeof saveAs !== "function") return showToast("La librería Word/FileSaver no está disponible.", "error");
-
-    const { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, AlignmentType, WidthType, BorderStyle } = window.docx;
-
-    const cell = text => new TableCell({
-      children:[new Paragraph({children:[new TextRun({text:String(text),bold:true,size:18})]})]
-    });
-    const plain = text => new Paragraph({children:[new TextRun({text:String(text),size:18})]});
-
-    const rows = [
-      new TableRow({children:["N°","Descripción / Material","Stock Actual","Stock Mínimo","Cantidad a Solicitar"].map(cell)})
-    ];
-    currentOrder.items.forEach((c,i) => rows.push(new TableRow({
-      children:[
-        cell(i+1),
-        cell(`${c.name} — ${c.category}`),
-        cell(`${c.stock} ${c.unit}`),
-        cell(`${c.minStock} ${c.unit}`),
-        cell(`${c.quantity} ${c.unit}`)
-      ]
-    })));
-
-    const doc = new Document({
-      sections:[{
-        properties:{page:{margin:{top:720,right:720,bottom:720,left:720}}},
-        children:[
-          new Paragraph({alignment:AlignmentType.CENTER,children:[new TextRun({text:"SISTEMA DE CONTROL E INVENTARIO",bold:true,size:28})]}),
-          new Paragraph({alignment:AlignmentType.CENTER,children:[new TextRun({text:"DEPARTAMENTO DE TECNOLOGÍA / SISTEMAS",bold:true,size:20})]}),
-          new Paragraph({alignment:AlignmentType.CENTER,children:[new TextRun({text:"ORDEN DE REQUERIMIENTO DE CONSUMIBLES",bold:true,size:22})]}),
-          plain(""),
-          new Table({width:{size:100,type:WidthType.PERCENTAGE},rows:[
-            new TableRow({children:[cell("Folio"),cell(currentOrder.folio),cell("Fecha"),cell(formatDate(currentOrder.date))]}),
-            new TableRow({children:[cell("Solicitante"),cell($("orderRequester").value.trim() || "Por definir"),cell("Área / Departamento"),cell($("orderDepartment").value.trim())]}),
-            new TableRow({children:[cell("Prioridad"),cell($("orderPriority").value),cell("Estado"),cell($("orderStatus").value)]})
-          ]}),
-          plain(""),
-          new Table({width:{size:100,type:WidthType.PERCENTAGE},rows}),
-          plain(""),
-          new Paragraph({children:[new TextRun({text:"JUSTIFICACIÓN",bold:true,size:20})]}),
-          plain($("orderJustification").value.trim()),
-          plain(""),
-          plain(""),
-          new Paragraph({alignment:AlignmentType.CENTER,children:[new TextRun({text:"______________________________                    ______________________________",size:18})]}),
-          new Paragraph({alignment:AlignmentType.CENTER,children:[new TextRun({text:"Solicitado Por                                      Aprobado Por",bold:true,size:18})]})
-        ]
-      }]
-    });
+    if (!window.docx || !window.saveAs) return showToast("Las librerías Word no están disponibles.", "error");
 
     try {
+      const { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, AlignmentType, WidthType, BorderStyle } = window.docx;
+      const cell = (text, bold=false) => new TableCell({children:[new Paragraph({children:[new TextRun({text:String(text),bold})]})]});
+      const rows = currentOrder.items.map((c,i) => new TableRow({children:[
+        cell(i+1), cell(`${c.name}${c.category ? ` — ${c.category}` : ""}`), cell(`${c.stock} ${c.unit}`), cell(`${c.minStock} ${c.unit}`), cell(`${c.quantity} ${c.unit}`, true)
+      ]}));
+      const doc = new Document({sections:[{properties:{page:{size:{width:11906,height:16838}}},children:[
+        new Paragraph({alignment:AlignmentType.LEFT,children:[new TextRun({text:"SISTEMA DE CONTROL E INVENTARIO",bold:true,size:28})]}),
+        new Paragraph({alignment:AlignmentType.LEFT,children:[new TextRun({text:"DEPARTAMENTO DE TECNOLOGÍA / SISTEMAS",bold:true,size:20})]}),
+        new Paragraph({alignment:AlignmentType.LEFT,children:[new TextRun({text:"ORDEN DE REQUERIMIENTO DE CONSUMIBLES",bold:true,size:18})]}),
+        new Paragraph({children:[new TextRun({text:`Folio: ${currentOrder.folio}    Fecha: ${formatDate(currentOrder.date)}`,bold:true})]}),
+        new Paragraph({children:[new TextRun({text:`Solicitante: ${$("orderRequester").value.trim() || "Por definir"}`})]}),
+        new Paragraph({children:[new TextRun({text:`Área / Departamento: ${$("orderDepartment").value.trim() || "Por definir"}`})]}),
+        new Paragraph({children:[new TextRun({text:`Prioridad: ${$("orderPriority").value}    Estado: ${$("orderStatus").value}`})]}),
+        new Table({width:{size:100,type:WidthType.PERCENTAGE},rows:[
+          new TableRow({children:[cell("N°",true),cell("Descripción / Material",true),cell("Stock Actual",true),cell("Stock Mínimo",true),cell("Cantidad a Solicitar",true)]}),
+          ...rows
+        ]}),
+        new Paragraph({children:[new TextRun({text:"JUSTIFICACIÓN",bold:true})]}),
+        new Paragraph({children:[new TextRun({text:$("orderJustification").value.trim()})]}),
+        new Paragraph({text:""}),
+        new Table({width:{size:100,type:WidthType.PERCENTAGE},rows:[new TableRow({children:[
+          new TableCell({children:[new Paragraph({text:"____________________________"}),new Paragraph({text:"Solicitado Por"}),new Paragraph({text:"Nombre y firma"})]}),
+          new TableCell({children:[new Paragraph({text:"____________________________"}),new Paragraph({text:"Aprobado Por"}),new Paragraph({text:"Nombre y firma"})]})
+        ]})]})
+      ]}]});
+
       const blob = await Packer.toBlob(doc);
       saveAs(blob, `Orden_Requerimiento_${currentOrder.folio}.docx`);
-      markOrderUsed();
+      await markOrderUsed();
       showToast("Documento Word generado.", "success");
     } catch (err) {
       console.error(err);
@@ -620,25 +643,82 @@
     try {
       const parsed = JSON.parse(await file.text());
       if (!Array.isArray(parsed.assets) || !Array.isArray(parsed.consumables)) throw new Error("Formato inválido");
-      if (!confirm("Esto reemplazará los datos actuales del navegador. ¿Continuar?")) return;
-      db = {
-        assets: parsed.assets,
-        consumables: parsed.consumables,
-        meta: { ...defaultDB.meta, ...(parsed.meta || {}) }
-      };
-      saveDB();
-      resetAssetForm(); resetConsumableForm(); renderAll();
-      showToast("Copia de seguridad restaurada.", "success");
+      if (!confirm("Esto reemplazará todos los registros actuales de Firebase. ¿Continuar?")) return;
+
+      const existing = {};
+      [...db.assets, ...db.consumables].forEach(item => {
+        if (item.idFirebase) existing[item.idFirebase] = null;
+      });
+
+      const writePromises = Object.keys(existing).map(key => window.eliminarItemFirebase(key));
+      await Promise.all(writePromises);
+
+      const newItems = [...parsed.assets.map(assetFirebaseData), ...parsed.consumables.map(consumableFirebaseData)];
+      await Promise.all(newItems.map(item => window.guardarItemFirebase(item)));
+      await window.actualizarConfiguracionFirebase({
+        nextOrderNumber: Number(parsed.meta?.nextOrderNumber || 1)
+      });
+
+      resetAssetForm();
+      resetConsumableForm();
+      showToast("Copia de seguridad restaurada en Firebase.", "success");
     } catch (err) {
       console.error(err);
-      showToast("El archivo JSON no tiene un formato de respaldo válido.", "error");
+      showToast("El archivo JSON no tiene un formato de respaldo válido o Firebase rechazó la operación.", "error");
     } finally {
       e.target.value = "";
     }
   });
 
-  // Inicialización
+  // ---------------- SINCRONIZACIÓN FIREBASE ----------------
+
+  // Escuchar cambios en tiempo real y actualizar las tablas/UI.
+  onValue(inventarioRef, (snapshot) => {
+    const data = snapshot.val();
+    const inventarioArray = [];
+    if (data) {
+      Object.keys(data).forEach((key) => {
+        inventarioArray.push({ idFirebase: key, ...data[key] });
+      });
+    }
+
+    db.assets = inventarioArray
+      .filter(item => item.recordType === "asset" || (!item.recordType && item.serial !== undefined))
+      .map(item => ({ ...item, id: item.idFirebase }));
+
+    db.consumables = inventarioArray
+      .filter(item => item.recordType === "consumable" || (!item.recordType && item.name !== undefined))
+      .map(item => ({ ...item, id: item.idFirebase }));
+
+    firebaseReady = true;
+    setConnectionStatus("Sincronizado en tiempo real", "online");
+    renderAll();
+  }, (error) => {
+    console.error("Firebase Realtime Database:", error);
+    firebaseReady = false;
+    setConnectionStatus("Error de conexión con Firebase", "error");
+    showToast("No fue posible leer los datos de Firebase. Revisa las reglas de Realtime Database.", "error");
+  });
+
+  onValue(configuracionRef, (snapshot) => {
+    const data = snapshot.val() || {};
+    db.meta.nextOrderNumber = Number(data.nextOrderNumber || 1);
+  });
+
+  // Inicialización de interfaz
   $("assetEntryDate").value = todayISO();
   $("consumableEntryDate").value = todayISO();
   renderAll();
 })();
+
+function formatDate(date) {
+  if (!date) return "—";
+  const [y,m,d] = String(date).split("-");
+  return y && m && d ? `${d}/${m}/${y}` : date;
+}
+
+function escapeHTML(value) {
+  return String(value ?? "").replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+  }[c]));
+}

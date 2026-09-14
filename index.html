@@ -40,7 +40,7 @@
         <button class="btn btn-secondary full" id="backupBtn">Exportar copia JSON</button>
         <button class="btn btn-secondary full" id="restoreBtn">Importar copia JSON</button>
         <input type="file" id="restoreInput" accept=".json,application/json" hidden>
-        <p class="storage-status"><span class="status-dot"></span> Datos guardados localmente</p>
+        <p class="storage-status"><span class="status-dot"></span> Conectando con Firebase...</p>
       </div>
     </aside>
 
@@ -222,7 +222,6 @@
       <div class="order-preview-wrap">
         <article class="order-paper" id="orderPaper">
           <header class="order-header">
-            <div class="logo-placeholder">LOGO</div>
             <div class="institution">
               <h1>SISTEMA DE CONTROL E INVENTARIO</h1>
               <h2>DEPARTAMENTO DE TECNOLOGÍA / SISTEMAS</h2>
@@ -263,6 +262,6 @@
     </div>
   </div>
 
-  <script src="js/app.js"></script>
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>
