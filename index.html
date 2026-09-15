@@ -3,265 +3,417 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Sistema de Control e Inventario de Activos y Consumibles">
-  <title>Control de Inventario | Activos y Consumibles</title>
+  <title>Sistema de Control de Inventario</title>
+  
+  <!-- CSS External Libraries & Local Styles -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
   <link rel="stylesheet" href="css/styles.css">
 
-  <!-- Librerías CDN solicitadas -->
+  <!-- External JS Libraries -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-  <script src="https://unpkg.com/docx@8.2.2/build/index.js"></script>
+  <script src="https://unpkg.com/docx@7.1.0/build/index.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <!-- Lector de Código de Barras / QR -->
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 </head>
 <body>
-  <div class="app-shell">
-    <aside class="sidebar" id="sidebar">
-      <div class="brand">
-        <div class="brand-logo">TI</div>
-        <div>
-          <strong>Inventario TI</strong>
-          <span>Control institucional</span>
-        </div>
-      </div>
 
-      <nav class="nav-tabs" aria-label="Módulos">
-        <button class="nav-btn active" data-tab="assets">
-          <span>Activos</span><small>Gestión de activos fijos</small>
+  <!-- Navbar -->
+  <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm mb-4">
+    <div class="container-fluid">
+      <a class="navbar-brand fw-bold" href="#">
+        <i class="fa-solid fa-boxes-stacked me-2"></i>Control de Inventario
+      </a>
+      <span class="navbar-text text-white-50"><i class="fa-solid fa-shield-halved me-1"></i> Producción & Tiempo Real</span>
+    </div>
+  </nav>
+
+  <div class="container-fluid px-4">
+    <!-- Navigation Tabs -->
+    <ul class="nav nav-tabs mb-4" id="mainTabs" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="inventario-tab" data-bs-toggle="tab" data-bs-target="#inventario-pane" type="button" role="tab">
+          <i class="fa-solid fa-list me-1"></i> Inventario General
         </button>
-        <button class="nav-btn" data-tab="consumables">
-          <span>Consumibles</span><small>Stock y suministros</small>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="movimientos-tab" data-bs-toggle="tab" data-bs-target="#movimientos-pane" type="button" role="tab">
+          <i class="fa-solid fa-clock-rotate-left me-1"></i> Historial Kárdex
         </button>
-        <button class="nav-btn" data-tab="alerts">
-          <span>Alertas</span><small>Requerimientos</small>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="alertas-tab" data-bs-toggle="tab" data-bs-target="#alertas-pane" type="button" role="tab">
+          <i class="fa-solid fa-triangle-exclamation me-1"></i> Alertas Stock Mínimo 
+          <span id="badgeAlertas" class="badge bg-danger rounded-pill d-none">0</span>
         </button>
-      </nav>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="requerimiento-tab" data-bs-toggle="tab" data-bs-target="#requerimiento-pane" type="button" role="tab">
+          <i class="fa-solid fa-file-invoice me-1"></i> Orden de Requerimiento
+        </button>
+      </li>
+    </ul>
 
-      <div class="sidebar-bottom">
-        <button class="btn btn-secondary full" id="backupBtn">Exportar copia JSON</button>
-        <button class="btn btn-secondary full" id="restoreBtn">Importar copia JSON</button>
-        <input type="file" id="restoreInput" accept=".json,application/json" hidden>
-        <p class="storage-status"><span class="status-dot"></span> Conectando con Firebase...</p>
-      </div>
-    </aside>
+    <div class="tab-content" id="mainTabsContent">
+      
+      <!-- TAB 1: INVENTARIO GENERAL -->
+      <div class="tab-pane fade show active" id="inventario-pane" role="tabpanel">
+        <div class="row g-3">
+          <!-- Form Panel -->
+          <div class="col-lg-4">
+            <div class="card shadow-sm border-0">
+              <div class="card-header bg-dark text-white fw-bold">
+                <i class="fa-solid fa-plus me-1"></i> Registrar / Editar Ítem
+              </div>
+              <div class="card-body">
+                <form id="formInventario">
+                  <input type="hidden" id="itemIdFirebase">
+                  
+                  <!-- Categoría y Auto SKU -->
+                  <div class="mb-3">
+                    <label for="categoria" class="form-label">Categoría</label>
+                    <select class="form-select" id="categoria" required>
+                      <option value="">Seleccione una categoría...</option>
+                      <option value="CCTV">CCTV / Cámaras</option>
+                      <option value="RED">Redes y Conectividad</option>
+                      <option value="AUD">Audio y Sonido</option>
+                      <option value="COMP">Cómputo / Hardware</option>
+                      <option value="MANT">Mantenimiento</option>
+                      <option value="GEN">General</option>
+                    </select>
+                  </div>
 
-    <main class="main-content">
-      <header class="topbar">
-        <button class="mobile-menu" id="mobileMenu" aria-label="Abrir menú">☰</button>
-        <div>
-          <p class="eyebrow">SISTEMA DE CONTROL</p>
-          <h1 id="pageTitle">Gestión de Activos Fijos</h1>
-        </div>
-        <div class="top-actions">
-          <button class="btn btn-secondary" id="exportExcelBtn">Excel</button>
-          <button class="btn btn-secondary" id="exportPdfBtn">PDF</button>
-        </div>
-      </header>
+                  <div class="mb-3">
+                    <label for="codigo" class="form-label">Código / SKU / Serial</label>
+                    <div class="input-group">
+                      <input type="text" class="form-control" id="codigo" required placeholder="Ej: CCTV-001 o Serial Escaneado">
+                      <button class="btn btn-outline-secondary" type="button" id="btnGenerarSKU" title="Generar SKU Automático">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i>
+                      </button>
+                      <button class="btn btn-outline-primary" type="button" id="btnEscanear" data-bs-toggle="modal" data-bs-target="#modalEscaner" title="Escanear Código de Barras">
+                        <i class="fa-solid fa-barcode"></i>
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div class="mb-3">
+                    <label for="nombre" class="form-label">Nombre del Producto / Activo</label>
+                    <input type="text" class="form-control" id="nombre" required placeholder="Ej: Cámara Domo IP 1080p">
+                  </div>
 
-      <section class="global-tools">
-        <div class="search-wrap">
-          <span>⌕</span>
-          <input id="globalSearch" type="search" placeholder="Buscar por serial, marca, modelo, nombre, categoría, responsable..." autocomplete="off">
-        </div>
-        <div class="filter-row">
-          <select id="typeFilter">
-            <option value="">Todos los tipos</option>
-            <option value="Activo Fijo">Activos fijos</option>
-            <option value="Consumible">Consumibles</option>
-          </select>
-          <select id="statusFilter">
-            <option value="">Todos los estados</option>
-            <option value="Disponible">Disponible</option>
-            <option value="Asignado">Asignado</option>
-            <option value="Mantenimiento">Mantenimiento</option>
-            <option value="Baja">Baja</option>
-          </select>
-          <select id="categoryFilter">
-            <option value="">Todas las categorías</option>
-          </select>
-          <button class="btn btn-ghost" id="clearFiltersBtn">Limpiar filtros</button>
-        </div>
-      </section>
+                  <!-- Selector de Estado -->
+                  <div class="mb-3">
+                    <label for="estadoActivo" class="form-label">Estado del Activo</label>
+                    <select class="form-select" id="estadoActivo" required>
+                      <option value="En Bodega">En Bodega</option>
+                      <option value="Asignado">Asignado</option>
+                    </select>
+                  </div>
 
-      <div class="toast-container" id="toastContainer"></div>
+                  <!-- Campos Dinámicos según Estado -->
+                  <div class="mb-3" id="grupoUbicacionBodega">
+                    <label for="ubicacionBodega" class="form-label">Ubicación en Bodega (Stand / Estante / Tramo)</label>
+                    <input type="text" class="form-control" id="ubicacionBodega" placeholder="Ej: Estante B-2, Tramo 3">
+                  </div>
 
-      <!-- ACTIVOS -->
-      <section class="tab-panel active" id="tab-assets">
-        <div class="stats-grid">
-          <article class="stat-card"><span>Total activos</span><strong id="statAssets">0</strong></article>
-          <article class="stat-card"><span>Disponibles</span><strong id="statAvailable">0</strong></article>
-          <article class="stat-card"><span>Asignados</span><strong id="statAssigned">0</strong></article>
-          <article class="stat-card warning"><span>En mantenimiento</span><strong id="statMaintenance">0</strong></article>
-        </div>
+                  <div class="mb-3 d-none" id="grupoUbicacionAsignado">
+                    <label for="lugarAsignacion" class="form-label">Espacio / Lugar de Asignación</label>
+                    <input type="text" class="form-control" id="lugarAsignacion" placeholder="Ej: Oficina Principal, Salón 3">
+                  </div>
 
-        <div class="card form-card">
-          <div class="card-heading">
-            <div><span class="section-kicker">REGISTRO</span><h2>Registrar activo fijo</h2></div>
-            <button class="btn btn-ghost" id="cancelAssetEditBtn" hidden>Cancelar edición</button>
-          </div>
-          <form id="assetForm" class="form-grid">
-            <input type="hidden" id="assetId">
-            <label>Marca<input id="assetBrand" required maxlength="80" placeholder="Ej. Lenovo"></label>
-            <label>Modelo<input id="assetModel" required maxlength="100" placeholder="Ej. ThinkCentre M70q"></label>
-            <label>Número de serie único<input id="assetSerial" required maxlength="100" placeholder="Serial / S/N"></label>
-            <label>Fecha de ingreso<input id="assetEntryDate" type="date" required></label>
-            <label>Fecha de egreso<input id="assetExitDate" type="date"></label>
-            <label>Estado
-              <select id="assetStatus" required>
-                <option value="Disponible">Disponible</option>
-                <option value="Asignado">Asignado</option>
-                <option value="Mantenimiento">Mantenimiento</option>
-                <option value="Baja">Baja</option>
-              </select>
-            </label>
-            <label class="span-2">Responsable<input id="assetResponsible" maxlength="120" placeholder="Nombre del responsable o área"></label>
-            <div class="form-actions span-2">
-              <button class="btn btn-primary" type="submit" id="assetSubmitBtn">Guardar activo</button>
-              <button class="btn btn-secondary" type="reset">Limpiar</button>
+                  <div class="mb-3 d-none" id="grupoResponsable">
+                    <label for="responsable" class="form-label">Persona Responsable / Custodio</label>
+                    <input type="text" class="form-control" id="responsable" placeholder="Ej: Juan Pérez (Mantenimiento)">
+                  </div>
+
+                  <div class="row">
+                    <div class="col-6 mb-3">
+                      <label for="cantidad" class="form-label">Cantidad Stock</label>
+                      <input type="number" class="form-control" id="cantidad" min="0" required placeholder="0">
+                    </div>
+                    <div class="col-6 mb-3">
+                      <label for="stockMinimo" class="form-label">Stock Mínimo</label>
+                      <input type="number" class="form-control" id="stockMinimo" min="0" required placeholder="5">
+                    </div>
+                  </div>
+
+                  <div class="d-grid gap-2">
+                    <button type="submit" class="btn btn-primary" id="btnGuardar">
+                      <i class="fa-solid fa-floppy-disk me-1"></i> Guardar Registro
+                    </button>
+                    <button type="button" class="btn btn-secondary d-none" id="btnCancelarEdicion">
+                      Cancelar Edición
+                    </button>
+                  </div>
+                </form>
+              </div>
             </div>
-          </form>
-        </div>
-
-        <div class="card table-card">
-          <div class="card-heading">
-            <div><span class="section-kicker">INVENTARIO</span><h2>Activos registrados</h2></div>
-            <span class="result-count" id="assetCount">0 registros</span>
           </div>
-          <div class="table-scroll">
-            <table>
-              <thead><tr><th>Marca</th><th>Modelo</th><th>Serial</th><th>Ingreso</th><th>Egreso</th><th>Estado</th><th>Responsable</th><th>Acciones</th></tr></thead>
-              <tbody id="assetTableBody"></tbody>
-            </table>
-          </div>
-          <div class="empty-state" id="assetEmpty">No hay activos que coincidan con los filtros.</div>
-        </div>
-      </section>
 
-      <!-- CONSUMIBLES -->
-      <section class="tab-panel" id="tab-consumables">
-        <div class="stats-grid">
-          <article class="stat-card"><span>Total consumibles</span><strong id="statConsumables">0</strong></article>
-          <article class="stat-card warning"><span>En nivel crítico</span><strong id="statCritical">0</strong></article>
-          <article class="stat-card"><span>Categorías</span><strong id="statCategories">0</strong></article>
-        </div>
-
-        <div class="card form-card">
-          <div class="card-heading">
-            <div><span class="section-kicker">REGISTRO</span><h2>Registrar consumible</h2></div>
-            <button class="btn btn-ghost" id="cancelConsumableEditBtn" hidden>Cancelar edición</button>
-          </div>
-          <form id="consumableForm" class="form-grid">
-            <input type="hidden" id="consumableId">
-            <label>Nombre<input id="consumableName" required maxlength="120" placeholder="Ej. Cable UTP Cat 6"></label>
-            <label>Categoría<input id="consumableCategory" required maxlength="80" placeholder="Ej. Cableado"></label>
-            <label>Unidad de medida<input id="consumableUnit" required maxlength="30" placeholder="Unidad, caja, rollo..."></label>
-            <label>Fecha de ingreso<input id="consumableEntryDate" type="date" required></label>
-            <label>Stock actual<input id="consumableStock" type="number" min="0" step="any" required placeholder="0"></label>
-            <label>Stock mínimo de alerta<input id="consumableMin" type="number" min="0" step="any" required placeholder="0"></label>
-            <div class="form-actions span-2">
-              <button class="btn btn-primary" type="submit" id="consumableSubmitBtn">Guardar consumible</button>
-              <button class="btn btn-secondary" type="reset">Limpiar</button>
+          <!-- Table Panel -->
+          <div class="col-lg-8">
+            <div class="card shadow-sm border-0">
+              <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                <span class="fw-bold"><i class="fa-solid fa-table me-1"></i> Existencias de Inventario</span>
+                <div>
+                  <button class="btn btn-sm btn-outline-success me-1" id="btnExportarExcel">
+                    <i class="fa-solid fa-file-excel me-1"></i> Excel
+                  </button>
+                  <button class="btn btn-sm btn-outline-primary" id="btnExportarWord">
+                    <i class="fa-solid fa-file-word me-1"></i> Word
+                  </button>
+                </div>
+              </div>
+              <div class="card-body">
+                <div class="mb-3">
+                  <input type="text" id="inputBuscar" class="form-control" placeholder="Buscar por SKU, serial, nombre, ubicación o responsable...">
+                </div>
+                
+                <div class="table-responsive">
+                  <table class="table table-hover align-middle" id="tablaInventario">
+                    <thead class="table-dark">
+                      <tr>
+                        <th>Código / SKU</th>
+                        <th>Producto</th>
+                        <th>Estado</th>
+                        <th>Ubicación / Lugar</th>
+                        <th class="text-center">Stock</th>
+                        <th class="text-center">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody id="tbodyInventario"></tbody>
+                  </table>
+                </div>
+              </div>
             </div>
-          </form>
-        </div>
-
-        <div class="card table-card">
-          <div class="card-heading">
-            <div><span class="section-kicker">INVENTARIO</span><h2>Consumibles registrados</h2></div>
-            <span class="result-count" id="consumableCount">0 registros</span>
           </div>
-          <div class="table-scroll">
-            <table>
-              <thead><tr><th>Nombre</th><th>Categoría</th><th>Unidad</th><th>Ingreso</th><th>Stock actual</th><th>Mínimo</th><th>Nivel</th><th>Acciones</th></tr></thead>
-              <tbody id="consumableTableBody"></tbody>
-            </table>
-          </div>
-          <div class="empty-state" id="consumableEmpty">No hay consumibles que coincidan con los filtros.</div>
         </div>
-      </section>
-
-      <!-- ALERTAS -->
-      <section class="tab-panel" id="tab-alerts">
-        <div class="alert-banner">
-          <div><span class="section-kicker">CONTROL DE STOCK</span><h2>Alertas y requerimientos</h2><p>Se muestran únicamente los consumibles cuyo stock actual es menor o igual al stock mínimo configurado.</p></div>
-          <button class="btn btn-primary" id="generateOrderBtn">Generar Orden de Requerimiento</button>
-        </div>
-
-        <div class="card table-card">
-          <div class="card-heading">
-            <div><span class="section-kicker">NIVEL CRÍTICO</span><h2>Consumibles que requieren reposición</h2></div>
-            <span class="critical-counter" id="criticalCount">0 críticos</span>
-          </div>
-          <div class="table-scroll">
-            <table>
-              <thead><tr><th>Material</th><th>Categoría</th><th>Unidad</th><th>Stock actual</th><th>Stock mínimo</th><th>Faltante sugerido</th><th>Acción</th></tr></thead>
-              <tbody id="alertTableBody"></tbody>
-            </table>
-          </div>
-          <div class="empty-state" id="alertEmpty">No hay consumibles en nivel crítico.</div>
-        </div>
-      </section>
-    </main>
-  </div>
-
-  <!-- MODAL ORDEN -->
-  <div class="modal-backdrop" id="orderModal" hidden>
-    <div class="modal large-modal" role="dialog" aria-modal="true" aria-labelledby="orderModalTitle">
-      <div class="modal-header">
-        <div><span class="section-kicker">DOCUMENTO INSTITUCIONAL</span><h2 id="orderModalTitle">Orden de Requerimiento</h2></div>
-        <button type="button" class="icon-btn" id="closeOrderModal" aria-label="Cerrar orden de requerimiento">×</button>
       </div>
 
-      <div class="order-controls">
-        <label>Solicitante<input id="orderRequester" placeholder="Nombre del solicitante"></label>
-        <label>Área / Departamento<input id="orderDepartment" value="Departamento de Tecnología / Sistemas"></label>
-        <label>Prioridad<select id="orderPriority"><option>Crítico</option><option>Alta</option></select></label>
-        <label>Estado<select id="orderStatus"><option>Pendiente de aprobación</option><option>Solicitado</option><option>Aprobado</option></select></label>
-        <label class="span-2">Justificación<textarea id="orderJustification" rows="3">Se solicita la reposición de los materiales relacionados debido a que presentan un nivel de stock igual o inferior al mínimo establecido para garantizar la continuidad operativa.</textarea></label>
+      <!-- TAB 2: HISTORIAL DE MOVIMIENTOS (KÁRDEX) -->
+      <div class="tab-pane fade" id="movimientos-pane" role="tabpanel">
+        <div class="card shadow-sm border-0">
+          <div class="card-header bg-dark text-white fw-bold">
+            <i class="fa-solid fa-clock-rotate-left me-1"></i> Historial de Auditoría de Movimientos (Kárdex en Tiempo Real)
+          </div>
+          <div class="card-body">
+            <div class="table-responsive">
+              <table class="table table-striped align-middle">
+                <thead>
+                  <tr>
+                    <th>Fecha / Hora</th>
+                    <th>Código</th>
+                    <th>Producto</th>
+                    <th>Acción</th>
+                    <th>Cantidad Af.</th>
+                  </tr>
+                </thead>
+                <tbody id="tbodyMovimientos"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <div class="order-preview-wrap">
-        <article class="order-paper" id="orderPaper">
-          <header class="order-header">
-            <div class="institution">
-              <h1>SISTEMA DE CONTROL E INVENTARIO</h1>
-              <h2>DEPARTAMENTO DE TECNOLOGÍA / SISTEMAS</h2>
-              <p>ORDEN DE REQUERIMIENTO DE CONSUMIBLES</p>
+      <!-- TAB 3: ALERTAS STOCK MÍNIMO -->
+      <div class="tab-pane fade" id="alertas-pane" role="tabpanel">
+        <div class="card shadow-sm border-0">
+          <div class="card-header bg-danger text-white fw-bold">
+            <i class="fa-solid fa-triangle-exclamation me-1"></i> Productos Críticos bajo Stock Mínimo
+          </div>
+          <div class="card-body">
+            <div class="table-responsive">
+              <table class="table table-striped align-middle">
+                <thead>
+                  <tr>
+                    <th>Código</th>
+                    <th>Producto</th>
+                    <th>Stock Actual</th>
+                    <th>Stock Mínimo</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody id="tbodyAlertas"></tbody>
+              </table>
             </div>
-            <div class="folio-box"><span>FOLIO</span><strong id="orderFolio">OR-000001</strong><small id="orderDate">--/--/----</small></div>
-          </header>
+          </div>
+        </div>
+      </div>
 
-          <section class="order-data-grid">
-            <div><span>Solicitante</span><strong id="previewRequester">Por definir</strong></div>
-            <div><span>Área / Departamento</span><strong id="previewDepartment">Departamento de Tecnología / Sistemas</strong></div>
-            <div><span>Nivel de Prioridad</span><strong id="previewPriority">Crítico</strong></div>
-            <div><span>Estado</span><strong id="previewStatus">Pendiente de aprobación</strong></div>
-          </section>
+      <!-- TAB 4: ORDEN DE REQUERIMIENTO -->
+      <div class="tab-pane fade" id="requerimiento-pane" role="tabpanel">
+        <div class="mb-3 d-flex justify-content-end">
+          <button class="btn btn-danger" id="btnExportarPDF">
+            <i class="fa-solid fa-file-pdf me-1"></i> Descargar Orden (PDF)
+          </button>
+        </div>
 
-          <table class="order-table">
-            <thead><tr><th>N°</th><th>Descripción / Material</th><th>Stock Actual</th><th>Stock Mínimo</th><th>Cantidad a Solicitar</th></tr></thead>
-            <tbody id="orderItems"></tbody>
+        <div class="orden-container shadow p-4 bg-white mx-auto" id="ordenDocumento">
+          <div class="orden-header">
+            <div class="header-left">
+              <h2 class="orden-titulo">SISTEMA DE GESTIÓN DE INVENTARIO</h2>
+              <p class="orden-subtitulo">ORDEN DE REQUERIMIENTO / REABASTECIMIENTO</p>
+            </div>
+            <div class="header-right text-end">
+              <div class="folio-box">
+                <span class="d-block fw-bold text-muted small">FOLIO REQ:</span>
+                <span class="folio-numero" id="reqFolio">#0000-2026</span>
+              </div>
+              <div class="fecha-box mt-2">
+                <span class="fw-bold small text-muted">Fecha: </span>
+                <span id="reqFecha">--/--/----</span>
+              </div>
+            </div>
+          </div>
+
+          <hr class="orden-hr">
+
+          <div class="orden-meta row my-3">
+            <div class="col-6">
+              <p class="mb-1"><strong>Generado Por:</strong> Módulo de Control de Inventario</p>
+              <p class="mb-0"><strong>Departamento:</strong> Redes y Mantenimiento / Sistemas</p>
+            </div>
+            <div class="col-6 text-end">
+              <p class="mb-1"><strong>Estado:</strong> Solicitud Pendiente</p>
+              <p class="mb-0"><strong>Prioridad:</strong> Alta</p>
+            </div>
+          </div>
+
+          <h5 class="fw-bold mt-4 mb-2">Detalle de Insumos / Productos Requeridos</h5>
+          <table class="table table-bordered table-sm">
+            <thead class="table-secondary">
+              <tr>
+                <th>Código</th>
+                <th>Descripción del Producto</th>
+                <th class="text-center">Stock Actual</th>
+                <th class="text-center">Stock Mínimo</th>
+                <th class="text-center">Cant. Sugerida a Pedir</th>
+              </tr>
+            </thead>
+            <tbody id="tbodyOrdenRequerimiento"></tbody>
           </table>
 
-          <section class="justification-box">
-            <h3>JUSTIFICACIÓN</h3>
-            <p id="previewJustification"></p>
-          </section>
-
-          <footer class="signature-grid">
-            <div><div class="signature-line"></div><strong>Solicitado Por</strong><span>Nombre y firma</span></div>
-            <div><div class="signature-line"></div><strong>Aprobado Por</strong><span>Nombre y firma</span></div>
-          </footer>
-          <div class="document-footer">Documento generado por el Sistema de Control e Inventario · Folio <span id="footerFolio"></span></div>
-        </article>
+          <div class="orden-firmas row mt-5 pt-4 text-center">
+            <div class="col-4">
+              <div class="linea-firma"></div>
+              <p class="small text-muted mb-0">Solicitado Por</p>
+            </div>
+            <div class="col-4">
+              <div class="linea-firma"></div>
+              <p class="small text-muted mb-0">Revisado Por (Sistemas)</p>
+            </div>
+            <div class="col-4">
+              <div class="linea-firma"></div>
+              <p class="small text-muted mb-0">Aprobado Por (Administración)</p>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <div class="modal-footer">
-        <button class="btn btn-secondary" id="downloadOrderPdfBtn">Descargar PDF</button>
-        <button class="btn btn-primary" id="downloadOrderWordBtn">Descargar Word</button>
+    </div>
+  </div>
+
+  <!-- Modal para la Cámara del Escáner -->
+  <div class="modal fade" id="modalEscaner" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="fa-solid fa-camera me-2"></i>Escanear Código de Barras</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" id="btnCerrarEscaner" aria-label="Close"></button>
+        </div>
+        <div class="modal-body text-center">
+          <div id="reader" style="width: 100%;"></div>
+        </div>
       </div>
     </div>
   </div>
 
-  <script type="module" src="js/app.js"></script>
+  <!-- FIREBASE INTEGRATION MODULE V11 -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js";
+    import { getDatabase, ref, push, set, onValue, remove, runTransaction } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyB-FX1wyTkycQ-21QRDf5VWy5p9N__ZNl8",
+      authDomain: "inventario-app-dfead.firebaseapp.com",
+      databaseURL: "https://inventario-app-dfead-default-rtdb.firebaseio.com",
+      projectId: "inventario-app-dfead",
+      storageBucket: "inventario-app-dfead.firebasestorage.app",
+      messagingSenderId: "1012268791157",
+      appId: "1:1012268791157:web:e2be525efa0cc13c318f3c"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const inventarioRef = ref(db, "inventario");
+    const movimientosRef = ref(db, "movimientos");
+
+    // Sincronización en Tiempo Real del Inventario
+    onValue(inventarioRef, (snapshot) => {
+      const data = snapshot.val();
+      const inventarioArray = [];
+      if (data) {
+        Object.keys(data).forEach((key) => {
+          inventarioArray.push({ idFirebase: key, ...data[key] });
+        });
+      }
+      if (typeof window.renderizarInventario === "function") {
+        window.renderizarInventario(inventarioArray);
+      }
+    });
+
+    // Sincronización en Tiempo Real del Historial Kárdex
+    onValue(movimientosRef, (snapshot) => {
+      const data = snapshot.val();
+      const movimientosArray = [];
+      if (data) {
+        Object.keys(data).forEach((key) => {
+          movimientosArray.push({ idFirebase: key, ...data[key] });
+        });
+      }
+      if (typeof window.renderizarMovimientos === "function") {
+        window.renderizarMovimientos(movimientosArray);
+      }
+    });
+
+    // Guardado y Edición en Firebase
+    window.guardarItemFirebase = function(itemData, idFirebase = null) {
+      if (idFirebase) {
+        return set(ref(db, `inventario/${idFirebase}`), itemData);
+      } else {
+        const nuevoRef = push(inventarioRef);
+        return set(nuevoRef, itemData);
+      }
+    };
+
+    // Eliminación de Ítem
+    window.eliminarItemFirebase = function(idFirebase) {
+      return remove(ref(db, `inventario/${idFirebase}`));
+    };
+
+    // Transacción Atómica de Incremento / Decremento Concurrente
+    window.modificarStockAtomico = function(idFirebase, delta) {
+      const stockRef = ref(db, `inventario/${idFirebase}/cantidad`);
+      return runTransaction(stockRef, (currentStock) => {
+        const val = currentStock || 0;
+        const nuevoStock = val + delta;
+        return nuevoStock < 0 ? 0 : nuevoStock;
+      });
+    };
+
+    // Registrar Evento en Kárdex Auditoría
+    window.registrarMovimientoFirebase = function(movimiento) {
+      const nuevoMovRef = push(movimientosRef);
+      return set(nuevoMovRef, {
+        ...movimiento,
+        fecha: new Date().toISOString()
+      });
+    };
+  </script>
+
+  <script src="js/app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
