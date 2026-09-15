@@ -1,724 +1,505 @@
-/* =========================================================
-   SISTEMA DE CONTROL E INVENTARIO
-   app.js - Firebase Realtime Database + interfaz
-   ========================================================= */
+/**
+ * Lógica de Negocio, Seguridad, Cámara y Control del Sistema
+ */
 
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js";
-import { getDatabase, ref, push, set, onValue, remove } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-database.js";
+let listaInventarioGlobal = [];
+let html5QrCode = null;
 
-const firebaseConfig = {
-  apiKey: "AIzaSyB-FX1wyTkycQ-21QRDf5VWy5p9N__ZNl8",
-  authDomain: "inventario-app-dfead.firebaseapp.com",
-  databaseURL: "https://inventario-app-dfead-default-rtdb.firebaseio.com",
-  projectId: "inventario-app-dfead",
-  storageBucket: "inventario-app-dfead.firebasestorage.app",
-  messagingSenderId: "1012268791157",
-  appId: "1:1012268791157:web:e2be525efa0cc13c318f3c"
-};
+document.addEventListener("DOMContentLoaded", () => {
+  inicializarEventosUI();
+  actualizarFechaFolioOrden();
+});
 
-const app = initializeApp(firebaseConfig);
-const dbFirebase = getDatabase(app);
-const inventarioRef = ref(dbFirebase, "inventario");
-const configuracionRef = ref(dbFirebase, "configuracion");
-
-(() => {
-  "use strict";
-
-  const todayISO = () => new Date().toISOString().slice(0,10);
-
-  const defaultDB = {
-    assets: [],
-    consumables: [],
-    meta: { nextOrderNumber: 1 }
-  };
-
-  let db = structuredClone(defaultDB);
-  let currentTab = "assets";
-  let editingAssetId = null;
-  let editingConsumableId = null;
-  let firebaseReady = false;
-
-  const $ = id => document.getElementById(id);
-  const normalize = value => String(value ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-
-  function setConnectionStatus(message, type = "") {
-    const status = document.querySelector(".storage-status");
-    if (!status) return;
-    status.className = `storage-status ${type}`;
-    status.innerHTML = `<span class="status-dot"></span> ${escapeHTML(message)}`;
-  }
-
-  function showToast(message, type="") {
-    const el = document.createElement("div");
-    el.className = `toast ${type}`;
-    el.textContent = message;
-    $("toastContainer").appendChild(el);
-    setTimeout(() => el.remove(), 3000);
-  }
-
-  function statusClass(status) {
+// Sanitización XSS Estricta
+function sanitizeText(str) {
+  if (typeof str !== 'string') return '';
+  return str.replace(/[&<>"']/g, function(m) {
     return {
-      "Disponible":"available",
-      "Asignado":"assigned",
-      "Mantenimiento":"maintenance",
-      "Baja":"retired"
-    }[status] || "";
-  }
-
-  function isCritical(item) {
-    return Number(item.stock) <= Number(item.minStock);
-  }
-
-  function getCritical() {
-    return db.consumables.filter(isCritical);
-  }
-
-  function activeFilters() {
-    return {
-      search: normalize($("globalSearch").value),
-      type: $("typeFilter").value,
-      status: $("statusFilter").value,
-      category: $("categoryFilter").value
-    };
-  }
-
-  function matchesCommon(item, type, filters) {
-    if (filters.type && filters.type !== type) return false;
-    if (type === "Activo Fijo" && filters.status && item.status !== filters.status) return false;
-    if (type === "Consumible" && filters.category && item.category !== filters.category) return false;
-    if (!filters.search) return true;
-    return normalize(Object.values(item).join(" ")).includes(filters.search);
-  }
-
-  function getFilteredAssets() {
-    const f = activeFilters();
-    return db.assets.filter(a => matchesCommon(a, "Activo Fijo", f));
-  }
-
-  function getFilteredConsumables() {
-    const f = activeFilters();
-    return db.consumables.filter(c => matchesCommon(c, "Consumible", f));
-  }
-
-  function updateCategoryFilter() {
-    const select = $("categoryFilter");
-    const current = select.value;
-    const categories = [...new Set(db.consumables.map(c => c.category).filter(Boolean))].sort((a,b) => a.localeCompare(b,"es"));
-    select.innerHTML = '<option value="">Todas las categorías</option>' +
-      categories.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join("");
-    if (categories.includes(current)) select.value = current;
-  }
-
-  function renderStats() {
-    const assets = db.assets;
-    $("statAssets").textContent = assets.length;
-    $("statAvailable").textContent = assets.filter(a => a.status === "Disponible").length;
-    $("statAssigned").textContent = assets.filter(a => a.status === "Asignado").length;
-    $("statMaintenance").textContent = assets.filter(a => a.status === "Mantenimiento").length;
-
-    $("statConsumables").textContent = db.consumables.length;
-    $("statCritical").textContent = getCritical().length;
-    $("statCategories").textContent = new Set(db.consumables.map(c => c.category)).size;
-    $("criticalCount").textContent = `${getCritical().length} críticos`;
-  }
-
-  function renderAssets() {
-    const rows = getFilteredAssets();
-    $("assetCount").textContent = `${rows.length} registro${rows.length === 1 ? "" : "s"}`;
-    $("assetEmpty").style.display = rows.length ? "none" : "block";
-    $("assetTableBody").innerHTML = rows.map(a => `
-      <tr>
-        <td>${escapeHTML(a.brand)}</td>
-        <td>${escapeHTML(a.model)}</td>
-        <td><strong>${escapeHTML(a.serial)}</strong></td>
-        <td>${formatDate(a.entryDate)}</td>
-        <td>${formatDate(a.exitDate)}</td>
-        <td><span class="badge ${statusClass(a.status)}">${escapeHTML(a.status)}</span></td>
-        <td>${escapeHTML(a.responsible || "—")}</td>
-        <td><div class="action-group">
-          <button class="action-btn" data-action="edit-asset" data-id="${a.id}">Editar</button>
-          <button class="action-btn danger" data-action="delete-asset" data-id="${a.id}">Eliminar</button>
-        </div></td>
-      </tr>`).join("");
-  }
-
-  function renderConsumables() {
-    const rows = getFilteredConsumables();
-    $("consumableCount").textContent = `${rows.length} registro${rows.length === 1 ? "" : "s"}`;
-    $("consumableEmpty").style.display = rows.length ? "none" : "block";
-    $("consumableTableBody").innerHTML = rows.map(c => {
-      const critical = isCritical(c);
-      return `<tr>
-        <td><strong>${escapeHTML(c.name)}</strong></td>
-        <td>${escapeHTML(c.category)}</td>
-        <td>${escapeHTML(c.unit)}</td>
-        <td>${formatDate(c.entryDate)}</td>
-        <td class="${critical ? "critical-number" : ""}">${c.stock}</td>
-        <td>${c.minStock}</td>
-        <td><span class="badge ${critical ? "critical" : "ok"}">${critical ? "Crítico" : "Normal"}</span></td>
-        <td><div class="action-group">
-          <button class="action-btn" data-action="edit-consumable" data-id="${c.id}">Editar</button>
-          <button class="action-btn danger" data-action="delete-consumable" data-id="${c.id}">Eliminar</button>
-        </div></td>
-      </tr>`;
-    }).join("");
-  }
-
-  function renderAlerts() {
-    const rows = getCritical();
-    $("alertEmpty").style.display = rows.length ? "none" : "block";
-    $("alertTableBody").innerHTML = rows.map(c => {
-      const suggested = Math.max(1, Number(c.minStock) - Number(c.stock));
-      return `<tr>
-        <td><strong>${escapeHTML(c.name)}</strong></td>
-        <td>${escapeHTML(c.category)}</td>
-        <td>${escapeHTML(c.unit)}</td>
-        <td class="critical-number">${c.stock}</td>
-        <td>${c.minStock}</td>
-        <td><strong>${suggested}</strong></td>
-        <td><button class="action-btn" data-action="edit-consumable" data-id="${c.id}">Editar</button></td>
-      </tr>`;
-    }).join("");
-  }
-
-  function renderAll() {
-    updateCategoryFilter();
-    renderStats();
-    renderAssets();
-    renderConsumables();
-    renderAlerts();
-  }
-
-  function switchTab(tab) {
-    currentTab = tab;
-    document.querySelectorAll(".nav-btn").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === tab));
-    document.querySelectorAll(".tab-panel").forEach(panel => panel.classList.toggle("active", panel.id === `tab-${tab}`));
-    const titles = {assets:"Gestión de Activos Fijos",consumables:"Gestión de Consumibles",alerts:"Alertas y Requerimientos"};
-    $("pageTitle").textContent = titles[tab];
-    if (window.innerWidth <= 760) $("sidebar").classList.remove("open");
-  }
-
-  function resetAssetForm() {
-    editingAssetId = null;
-    $("assetId").value = "";
-    $("assetForm").reset();
-    $("assetEntryDate").value = todayISO();
-    $("assetSubmitBtn").textContent = "Guardar activo";
-    $("cancelAssetEditBtn").hidden = true;
-  }
-
-  function resetConsumableForm() {
-    editingConsumableId = null;
-    $("consumableId").value = "";
-    $("consumableForm").reset();
-    $("consumableEntryDate").value = todayISO();
-    $("consumableSubmitBtn").textContent = "Guardar consumible";
-    $("cancelConsumableEditBtn").hidden = true;
-  }
-
-  function editAsset(id) {
-    const a = db.assets.find(x => x.id === id);
-    if (!a) return;
-    editingAssetId = id;
-    $("assetId").value = id;
-    $("assetBrand").value = a.brand;
-    $("assetModel").value = a.model;
-    $("assetSerial").value = a.serial;
-    $("assetEntryDate").value = a.entryDate;
-    $("assetExitDate").value = a.exitDate || "";
-    $("assetStatus").value = a.status;
-    $("assetResponsible").value = a.responsible || "";
-    $("assetSubmitBtn").textContent = "Actualizar activo";
-    $("cancelAssetEditBtn").hidden = false;
-    switchTab("assets");
-    $("assetBrand").focus();
-  }
-
-  function editConsumable(id) {
-    const c = db.consumables.find(x => x.id === id);
-    if (!c) return;
-    editingConsumableId = id;
-    $("consumableId").value = id;
-    $("consumableName").value = c.name;
-    $("consumableCategory").value = c.category;
-    $("consumableUnit").value = c.unit;
-    $("consumableEntryDate").value = c.entryDate;
-    $("consumableStock").value = c.stock;
-    $("consumableMin").value = c.minStock;
-    $("consumableSubmitBtn").textContent = "Actualizar consumible";
-    $("cancelConsumableEditBtn").hidden = false;
-    switchTab("consumables");
-    $("consumableName").focus();
-  }
-
-  function assetFirebaseData(item) {
-    return {
-      recordType: "asset",
-      brand: item.brand,
-      model: item.model,
-      serial: item.serial,
-      entryDate: item.entryDate,
-      exitDate: item.exitDate || "",
-      status: item.status,
-      responsible: item.responsible || ""
-    };
-  }
-
-  function consumableFirebaseData(item) {
-    return {
-      recordType: "consumable",
-      name: item.name,
-      category: item.category,
-      unit: item.unit,
-      entryDate: item.entryDate,
-      stock: Number(item.stock),
-      minStock: Number(item.minStock)
-    };
-  }
-
-  // Hacer disponibles globalmente las funciones solicitadas para guardar y eliminar en Firebase.
-  window.guardarItemFirebase = function(itemData, idFirebase = null) {
-    const targetRef = idFirebase ? ref(dbFirebase, `inventario/${idFirebase}`) : push(inventarioRef);
-    return set(targetRef, itemData);
-  };
-
-  window.eliminarItemFirebase = function(idFirebase) {
-    return remove(ref(dbFirebase, `inventario/${idFirebase}`));
-  };
-
-  window.actualizarConfiguracionFirebase = function(data) {
-    return set(configuracionRef, data);
-  };
-
-  async function deleteAsset(id) {
-    const a = db.assets.find(x => x.id === id);
-    if (!a || !confirm(`¿Eliminar el activo con serial "${a.serial}"?`)) return;
-    try {
-      await window.eliminarItemFirebase(a.idFirebase || id);
-      showToast("Activo eliminado.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("No fue posible eliminar el activo en Firebase.", "error");
-    }
-  }
-
-  async function deleteConsumable(id) {
-    const c = db.consumables.find(x => x.id === id);
-    if (!c || !confirm(`¿Eliminar "${c.name}" del inventario?`)) return;
-    try {
-      await window.eliminarItemFirebase(c.idFirebase || id);
-      showToast("Consumible eliminado.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("No fue posible eliminar el consumible en Firebase.", "error");
-    }
-  }
-
-  $("assetForm").addEventListener("submit", async e => {
-    e.preventDefault();
-    if (!firebaseReady) return showToast("Firebase todavía no está listo. Intenta nuevamente.", "error");
-
-    const serial = $("assetSerial").value.trim();
-    const duplicate = db.assets.some(a => normalize(a.serial) === normalize(serial) && a.id !== editingAssetId);
-    if (duplicate) return showToast("El número de serie debe ser único.", "error");
-
-    const item = {
-      id: editingAssetId || null,
-      brand: $("assetBrand").value.trim(),
-      model: $("assetModel").value.trim(),
-      serial,
-      entryDate: $("assetEntryDate").value,
-      exitDate: $("assetExitDate").value,
-      status: $("assetStatus").value,
-      responsible: $("assetResponsible").value.trim()
-    };
-
-    try {
-      await window.guardarItemFirebase(assetFirebaseData(item), editingAssetId);
-      resetAssetForm();
-      showToast(editingAssetId ? "Activo actualizado en tiempo real." : "Activo registrado en tiempo real.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("No fue posible guardar el activo en Firebase.", "error");
-    }
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[m];
   });
-
-  $("consumableForm").addEventListener("submit", async e => {
-    e.preventDefault();
-    if (!firebaseReady) return showToast("Firebase todavía no está listo. Intenta nuevamente.", "error");
-
-    const stock = Number($("consumableStock").value);
-    const minStock = Number($("consumableMin").value);
-    if (stock < 0 || minStock < 0) return showToast("El stock no puede ser negativo.", "error");
-
-    const item = {
-      id: editingConsumableId || null,
-      name: $("consumableName").value.trim(),
-      category: $("consumableCategory").value.trim(),
-      unit: $("consumableUnit").value.trim(),
-      entryDate: $("consumableEntryDate").value,
-      stock,
-      minStock
-    };
-
-    try {
-      await window.guardarItemFirebase(consumableFirebaseData(item), editingConsumableId);
-      resetConsumableForm();
-      showToast(editingConsumableId ? "Consumible actualizado en tiempo real." : "Consumible registrado en tiempo real.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("No fue posible guardar el consumible en Firebase.", "error");
-    }
-  });
-
-  $("assetForm").addEventListener("reset", () => setTimeout(() => {
-    if (!editingAssetId) $("assetEntryDate").value = todayISO();
-  }, 0));
-  $("consumableForm").addEventListener("reset", () => setTimeout(() => {
-    if (!editingConsumableId) $("consumableEntryDate").value = todayISO();
-  }, 0));
-
-  $("cancelAssetEditBtn").addEventListener("click", resetAssetForm);
-  $("cancelConsumableEditBtn").addEventListener("click", resetConsumableForm);
-
-  document.querySelectorAll(".nav-btn").forEach(btn => btn.addEventListener("click", () => switchTab(btn.dataset.tab)));
-
-  $("globalSearch").addEventListener("input", renderAll);
-  $("typeFilter").addEventListener("change", renderAll);
-  $("statusFilter").addEventListener("change", renderAll);
-  $("categoryFilter").addEventListener("change", renderAll);
-  $("clearFiltersBtn").addEventListener("click", () => {
-    $("globalSearch").value = "";
-    $("typeFilter").value = "";
-    $("statusFilter").value = "";
-    $("categoryFilter").value = "";
-    renderAll();
-  });
-
-  document.addEventListener("click", e => {
-    const button = e.target.closest("[data-action]");
-    if (!button) return;
-    const {action,id} = button.dataset;
-    if (action === "edit-asset") editAsset(id);
-    if (action === "delete-asset") deleteAsset(id);
-    if (action === "edit-consumable") editConsumable(id);
-    if (action === "delete-consumable") deleteConsumable(id);
-  });
-
-  $("mobileMenu").addEventListener("click", () => $("sidebar").classList.toggle("open"));
-
-  // ---------------- ORDEN DE REQUERIMIENTO ----------------
-
-  let currentOrder = null;
-
-  function nextFolio() {
-    const number = Number(db.meta.nextOrderNumber || 1);
-    return `OR-${String(number).padStart(6,"0")}`;
-  }
-
-  function generateOrder() {
-    const critical = getCritical();
-    if (!critical.length) {
-      showToast("No hay consumibles en nivel crítico para generar una orden.", "error");
-      return;
-    }
-
-    currentOrder = {
-      folio: nextFolio(),
-      date: todayISO(),
-      items: critical.map(c => ({
-        ...c,
-        quantity: Math.max(1, Number(c.minStock) - Number(c.stock))
-      }))
-    };
-
-    $("orderRequester").value = "";
-    $("orderDepartment").value = "Departamento de Tecnología / Sistemas";
-    $("orderPriority").value = "Crítico";
-    $("orderStatus").value = "Pendiente de aprobación";
-    $("orderJustification").value = "Se solicita la reposición de los materiales relacionados debido a que presentan un nivel de stock igual o inferior al mínimo establecido para garantizar la continuidad operativa.";
-    updateOrderPreview();
-    $("orderModal").hidden = false;
-    $("orderModal").setAttribute("aria-hidden", "false");
-  }
-
-  function updateOrderPreview() {
-    if (!currentOrder) return;
-    $("orderFolio").textContent = currentOrder.folio;
-    $("orderDate").textContent = formatDate(currentOrder.date);
-    $("footerFolio").textContent = currentOrder.folio;
-
-    $("previewRequester").textContent = $("orderRequester").value.trim() || "Por definir";
-    $("previewDepartment").textContent = $("orderDepartment").value.trim() || "Por definir";
-    $("previewPriority").textContent = $("orderPriority").value;
-    $("previewStatus").textContent = $("orderStatus").value;
-    $("previewJustification").textContent = $("orderJustification").value.trim();
-
-    $("orderItems").innerHTML = currentOrder.items.map((c,i) => `
-      <tr>
-        <td>${i+1}</td>
-        <td>${escapeHTML(c.name)}${c.category ? ` — ${escapeHTML(c.category)}` : ""}</td>
-        <td class="stock-critical">${c.stock} ${escapeHTML(c.unit)}</td>
-        <td>${c.minStock} ${escapeHTML(c.unit)}</td>
-        <td><strong>${c.quantity} ${escapeHTML(c.unit)}</strong></td>
-      </tr>`).join("");
-  }
-
-  $("generateOrderBtn").addEventListener("click", generateOrder);
-  ["orderRequester","orderDepartment","orderPriority","orderStatus","orderJustification"].forEach(id => {
-    $(id).addEventListener("input", updateOrderPreview);
-    $(id).addEventListener("change", updateOrderPreview);
-  });
-
-  function closeOrderModal() {
-    $("orderModal").hidden = true;
-    $("orderModal").setAttribute("aria-hidden", "true");
-  }
-
-  $("closeOrderModal").addEventListener("click", closeOrderModal);
-
-  $("orderModal").addEventListener("click", e => {
-    if (e.target === $("orderModal")) closeOrderModal();
-  });
-
-  document.addEventListener("keydown", e => {
-    if (e.key === "Escape" && !$("orderModal").hidden) closeOrderModal();
-  });
-
-  async function markOrderUsed() {
-    const nextNumber = Number(db.meta.nextOrderNumber || 1) + 1;
-    try {
-      await window.actualizarConfiguracionFirebase({ nextOrderNumber: nextNumber });
-    } catch (err) {
-      console.error(err);
-      showToast("La orden se generó, pero no se pudo actualizar el consecutivo.", "error");
-    }
-  }
-
-  async function downloadOrderPDF() {
-    if (!currentOrder) return;
-    if (typeof html2pdf === "undefined") return showToast("La librería PDF no está disponible.", "error");
-
-    const paper = $("orderPaper");
-    const filename = `Orden_Requerimiento_${currentOrder.folio}.pdf`;
-    const options = {
-      margin: 0,
-      filename,
-      image: {type:"jpeg",quality:.98},
-      html2canvas: {scale:2,useCORS:true,backgroundColor:"#ffffff"},
-      jsPDF: {unit:"mm",format:"a4",orientation:"portrait"}
-    };
-    try {
-      await html2pdf().set(options).from(paper).save();
-      await markOrderUsed();
-      showToast("PDF generado correctamente.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("No fue posible generar el PDF.", "error");
-    }
-  }
-
-  async function downloadOrderWord() {
-    if (!currentOrder) return;
-    if (!window.docx || !window.saveAs) return showToast("Las librerías Word no están disponibles.", "error");
-
-    try {
-      const { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, AlignmentType, WidthType, BorderStyle } = window.docx;
-      const cell = (text, bold=false) => new TableCell({children:[new Paragraph({children:[new TextRun({text:String(text),bold})]})]});
-      const rows = currentOrder.items.map((c,i) => new TableRow({children:[
-        cell(i+1), cell(`${c.name}${c.category ? ` — ${c.category}` : ""}`), cell(`${c.stock} ${c.unit}`), cell(`${c.minStock} ${c.unit}`), cell(`${c.quantity} ${c.unit}`, true)
-      ]}));
-      const doc = new Document({sections:[{properties:{page:{size:{width:11906,height:16838}}},children:[
-        new Paragraph({alignment:AlignmentType.LEFT,children:[new TextRun({text:"SISTEMA DE CONTROL E INVENTARIO",bold:true,size:28})]}),
-        new Paragraph({alignment:AlignmentType.LEFT,children:[new TextRun({text:"DEPARTAMENTO DE TECNOLOGÍA / SISTEMAS",bold:true,size:20})]}),
-        new Paragraph({alignment:AlignmentType.LEFT,children:[new TextRun({text:"ORDEN DE REQUERIMIENTO DE CONSUMIBLES",bold:true,size:18})]}),
-        new Paragraph({children:[new TextRun({text:`Folio: ${currentOrder.folio}    Fecha: ${formatDate(currentOrder.date)}`,bold:true})]}),
-        new Paragraph({children:[new TextRun({text:`Solicitante: ${$("orderRequester").value.trim() || "Por definir"}`})]}),
-        new Paragraph({children:[new TextRun({text:`Área / Departamento: ${$("orderDepartment").value.trim() || "Por definir"}`})]}),
-        new Paragraph({children:[new TextRun({text:`Prioridad: ${$("orderPriority").value}    Estado: ${$("orderStatus").value}`})]}),
-        new Table({width:{size:100,type:WidthType.PERCENTAGE},rows:[
-          new TableRow({children:[cell("N°",true),cell("Descripción / Material",true),cell("Stock Actual",true),cell("Stock Mínimo",true),cell("Cantidad a Solicitar",true)]}),
-          ...rows
-        ]}),
-        new Paragraph({children:[new TextRun({text:"JUSTIFICACIÓN",bold:true})]}),
-        new Paragraph({children:[new TextRun({text:$("orderJustification").value.trim()})]}),
-        new Paragraph({text:""}),
-        new Table({width:{size:100,type:WidthType.PERCENTAGE},rows:[new TableRow({children:[
-          new TableCell({children:[new Paragraph({text:"____________________________"}),new Paragraph({text:"Solicitado Por"}),new Paragraph({text:"Nombre y firma"})]}),
-          new TableCell({children:[new Paragraph({text:"____________________________"}),new Paragraph({text:"Aprobado Por"}),new Paragraph({text:"Nombre y firma"})]})
-        ]})]})
-      ]}]});
-
-      const blob = await Packer.toBlob(doc);
-      saveAs(blob, `Orden_Requerimiento_${currentOrder.folio}.docx`);
-      await markOrderUsed();
-      showToast("Documento Word generado.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("No fue posible generar el documento Word.", "error");
-    }
-  }
-
-  $("downloadOrderPdfBtn").addEventListener("click", downloadOrderPDF);
-  $("downloadOrderWordBtn").addEventListener("click", downloadOrderWord);
-
-  // ---------------- EXPORTACIÓN GENERAL ----------------
-
-  function exportExcel() {
-    if (typeof XLSX === "undefined") return showToast("La librería Excel no está disponible.", "error");
-
-    const assets = getFilteredAssets().map(a => ({
-      Tipo:"Activo Fijo", Marca:a.brand, Modelo:a.model, "Número de Serie":a.serial,
-      "Fecha de Ingreso":a.entryDate, "Fecha de Egreso":a.exitDate || "",
-      Estado:a.status, Responsable:a.responsible || ""
-    }));
-    const consumables = getFilteredConsumables().map(c => ({
-      Tipo:"Consumible", Nombre:c.name, Categoría:c.category, "Unidad de Medida":c.unit,
-      "Fecha de Ingreso":c.entryDate, "Stock Actual":c.stock, "Stock Mínimo":c.minStock,
-      Nivel:isCritical(c) ? "Crítico" : "Normal"
-    }));
-
-    const wb = XLSX.utils.book_new();
-    const wsAssets = XLSX.utils.json_to_sheet(assets);
-    const wsConsumables = XLSX.utils.json_to_sheet(consumables);
-    XLSX.utils.book_append_sheet(wb, wsAssets, "Activos Fijos");
-    XLSX.utils.book_append_sheet(wb, wsConsumables, "Consumibles");
-    XLSX.writeFile(wb, `Inventario_${todayISO()}.xlsx`);
-    showToast("Excel exportado correctamente.", "success");
-  }
-
-  async function exportGeneralPDF() {
-    if (typeof html2pdf === "undefined") return showToast("La librería PDF no está disponible.", "error");
-
-    const assets = getFilteredAssets();
-    const consumables = getFilteredConsumables();
-    const wrapper = document.createElement("div");
-    wrapper.style.cssText = "width:100%;padding:25px;font-family:Arial;color:#172033;background:#fff";
-    wrapper.innerHTML = `
-      <h1 style="margin:0 0 5px;font-size:20px">Sistema de Control e Inventario</h1>
-      <p style="margin:0 0 18px;font-size:10px;color:#68758a">Exportación general · ${formatDate(todayISO())}</p>
-      <h2 style="font-size:14px">Activos Fijos (${assets.length})</h2>
-      <table style="width:100%;border-collapse:collapse;font-size:8px">
-        <thead><tr><th style="border:1px solid #ccc;padding:5px">Marca</th><th style="border:1px solid #ccc;padding:5px">Modelo</th><th style="border:1px solid #ccc;padding:5px">Serial</th><th style="border:1px solid #ccc;padding:5px">Estado</th><th style="border:1px solid #ccc;padding:5px">Responsable</th></tr></thead>
-        <tbody>${assets.map(a=>`<tr><td style="border:1px solid #ddd;padding:5px">${escapeHTML(a.brand)}</td><td style="border:1px solid #ddd;padding:5px">${escapeHTML(a.model)}</td><td style="border:1px solid #ddd;padding:5px">${escapeHTML(a.serial)}</td><td style="border:1px solid #ddd;padding:5px">${escapeHTML(a.status)}</td><td style="border:1px solid #ddd;padding:5px">${escapeHTML(a.responsible)}</td></tr>`).join("")}</tbody>
-      </table>
-      <h2 style="font-size:14px;margin-top:20px">Consumibles (${consumables.length})</h2>
-      <table style="width:100%;border-collapse:collapse;font-size:8px">
-        <thead><tr><th style="border:1px solid #ccc;padding:5px">Nombre</th><th style="border:1px solid #ccc;padding:5px">Categoría</th><th style="border:1px solid #ccc;padding:5px">Unidad</th><th style="border:1px solid #ccc;padding:5px">Stock</th><th style="border:1px solid #ccc;padding:5px">Mínimo</th><th style="border:1px solid #ccc;padding:5px">Nivel</th></tr></thead>
-        <tbody>${consumables.map(c=>`<tr><td style="border:1px solid #ddd;padding:5px">${escapeHTML(c.name)}</td><td style="border:1px solid #ddd;padding:5px">${escapeHTML(c.category)}</td><td style="border:1px solid #ddd;padding:5px">${escapeHTML(c.unit)}</td><td style="border:1px solid #ddd;padding:5px">${c.stock}</td><td style="border:1px solid #ddd;padding:5px">${c.minStock}</td><td style="border:1px solid #ddd;padding:5px">${isCritical(c)?"CRÍTICO":"Normal"}</td></tr>`).join("")}</tbody>
-      </table>`;
-    document.body.appendChild(wrapper);
-
-    try {
-      await html2pdf().set({
-        margin:8, filename:`Inventario_${todayISO()}.pdf`,
-        image:{type:"jpeg",quality:.95}, html2canvas:{scale:2},
-        jsPDF:{unit:"mm",format:"a4",orientation:"landscape"}
-      }).from(wrapper).save();
-      showToast("PDF general exportado.", "success");
-    } catch (err) {
-      console.error(err); showToast("No fue posible generar el PDF.", "error");
-    } finally { wrapper.remove(); }
-  }
-
-  $("exportExcelBtn").addEventListener("click", exportExcel);
-  $("exportPdfBtn").addEventListener("click", exportGeneralPDF);
-
-  // ---------------- BACKUP / RESTORE ----------------
-
-  $("backupBtn").addEventListener("click", () => {
-    const blob = new Blob([JSON.stringify(db,null,2)], {type:"application/json"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `Backup_Inventario_${todayISO()}.json`; a.click();
-    URL.revokeObjectURL(url);
-    showToast("Copia de seguridad exportada.", "success");
-  });
-
-  $("restoreBtn").addEventListener("click", () => $("restoreInput").click());
-
-  $("restoreInput").addEventListener("change", async e => {
-    const file = e.target.files[0];
-    if (!file) return;
-    try {
-      const parsed = JSON.parse(await file.text());
-      if (!Array.isArray(parsed.assets) || !Array.isArray(parsed.consumables)) throw new Error("Formato inválido");
-      if (!confirm("Esto reemplazará todos los registros actuales de Firebase. ¿Continuar?")) return;
-
-      const existing = {};
-      [...db.assets, ...db.consumables].forEach(item => {
-        if (item.idFirebase) existing[item.idFirebase] = null;
-      });
-
-      const writePromises = Object.keys(existing).map(key => window.eliminarItemFirebase(key));
-      await Promise.all(writePromises);
-
-      const newItems = [...parsed.assets.map(assetFirebaseData), ...parsed.consumables.map(consumableFirebaseData)];
-      await Promise.all(newItems.map(item => window.guardarItemFirebase(item)));
-      await window.actualizarConfiguracionFirebase({
-        nextOrderNumber: Number(parsed.meta?.nextOrderNumber || 1)
-      });
-
-      resetAssetForm();
-      resetConsumableForm();
-      showToast("Copia de seguridad restaurada en Firebase.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("El archivo JSON no tiene un formato de respaldo válido o Firebase rechazó la operación.", "error");
-    } finally {
-      e.target.value = "";
-    }
-  });
-
-  // ---------------- SINCRONIZACIÓN FIREBASE ----------------
-
-  // Escuchar cambios en tiempo real y actualizar las tablas/UI.
-  onValue(inventarioRef, (snapshot) => {
-    const data = snapshot.val();
-    const inventarioArray = [];
-    if (data) {
-      Object.keys(data).forEach((key) => {
-        inventarioArray.push({ idFirebase: key, ...data[key] });
-      });
-    }
-
-    db.assets = inventarioArray
-      .filter(item => item.recordType === "asset" || (!item.recordType && item.serial !== undefined))
-      .map(item => ({ ...item, id: item.idFirebase }));
-
-    db.consumables = inventarioArray
-      .filter(item => item.recordType === "consumable" || (!item.recordType && item.name !== undefined))
-      .map(item => ({ ...item, id: item.idFirebase }));
-
-    firebaseReady = true;
-    setConnectionStatus("Sincronizado en tiempo real", "online");
-    renderAll();
-  }, (error) => {
-    console.error("Firebase Realtime Database:", error);
-    firebaseReady = false;
-    setConnectionStatus("Error de conexión con Firebase", "error");
-    showToast("No fue posible leer los datos de Firebase. Revisa las reglas de Realtime Database.", "error");
-  });
-
-  onValue(configuracionRef, (snapshot) => {
-    const data = snapshot.val() || {};
-    db.meta.nextOrderNumber = Number(data.nextOrderNumber || 1);
-  });
-
-  // Inicialización de interfaz
-  $("assetEntryDate").value = todayISO();
-  $("consumableEntryDate").value = todayISO();
-  renderAll();
-})();
-
-function formatDate(date) {
-  if (!date) return "—";
-  const [y,m,d] = String(date).split("-");
-  return y && m && d ? `${d}/${m}/${y}` : date;
 }
 
-function escapeHTML(value) {
-  return String(value ?? "").replace(/[&<>"']/g, c => ({
-    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
-  }[c]));
+// Generador de Beep Nativo (Web Audio API)
+function emitirBeepConfirmacion() {
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // Tono A5
+    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + 0.15);
+  } catch (e) {
+    console.warn("Audio Context no soportado o deshabilitado.", e);
+  }
+}
+
+function inicializarEventosUI() {
+  // Manejo de formulario de registro/edición
+  const form = document.getElementById("formInventario");
+  form.addEventListener("submit", manejarGuardado);
+
+  document.getElementById("btnCancelarEdicion").addEventListener("click", resetearFormulario);
+
+  // Generación Automática de SKU
+  document.getElementById("btnGenerarSKU").addEventListener("click", generarSKUAutomatico);
+  document.getElementById("categoria").addEventListener("change", () => {
+    if (!document.getElementById("itemIdFirebase").value) {
+      generarSKUAutomatico();
+    }
+  });
+
+  // Visibilidad de Campos Dinámicos
+  document.getElementById("estadoActivo").addEventListener("change", (e) => {
+    toggleCamposUbicacion(e.target.value);
+  });
+
+  // Búsqueda Sanitizada en Tiempo Real
+  document.getElementById("inputBuscar").addEventListener("input", (e) => {
+    const query = e.target.value.toLowerCase().trim();
+    const filtrados = listaInventarioGlobal.filter(item =>
+      (item.codigo && item.codigo.toLowerCase().includes(query)) ||
+      (item.nombre && item.nombre.toLowerCase().includes(query)) ||
+      (item.ubicacionBodega && item.ubicacionBodega.toLowerCase().includes(query)) ||
+      (item.lugarAsignacion && item.lugarAsignacion.toLowerCase().includes(query)) ||
+      (item.responsable && item.responsable.toLowerCase().includes(query))
+    );
+    renderizarTabla(filtrados);
+  });
+
+  // Modal del Escáner de Cámara
+  const modalEscaner = document.getElementById('modalEscaner');
+  modalEscaner.addEventListener('shown.bs.modal', iniciarCamaraEscaner);
+  modalEscaner.addEventListener('hidden.bs.modal', detenerCamaraEscaner);
+
+  // Exportaciones
+  document.getElementById("btnExportarExcel").addEventListener("click", exportarExcel);
+  document.getElementById("btnExportarWord").addEventListener("click", exportarWord);
+  document.getElementById("btnExportarPDF").addEventListener("click", exportarPDF);
+}
+
+function toggleCamposUbicacion(estado) {
+  const gBodega = document.getElementById("grupoUbicacionBodega");
+  const gAsignado = document.getElementById("grupoUbicacionAsignado");
+  const gResp = document.getElementById("grupoResponsable");
+
+  if (estado === "En Bodega") {
+    gBodega.classList.remove("d-none");
+    gAsignado.classList.add("d-none");
+    gResp.classList.add("d-none");
+  } else {
+    gBodega.classList.add("d-none");
+    gAsignado.classList.remove("d-none");
+    gResp.classList.remove("d-none");
+  }
+}
+
+function generarSKUAutomatico() {
+  const catSelect = document.getElementById("categoria").value || "GEN";
+  const prefijo = catSelect.toUpperCase();
+  const conteo = listaInventarioGlobal.filter(i => (i.categoria || '').toUpperCase() === prefijo).length + 1;
+  const correlativo = String(conteo).padStart(3, '0');
+  
+  document.getElementById("codigo").value = `${prefijo}-${correlativo}`;
+}
+
+// Invocado por Firebase al cambiar el estado del inventario
+window.renderizarInventario = function(data) {
+  listaInventarioGlobal = data;
+  renderizarTabla(listaInventarioGlobal);
+  actualizarAlertas(listaInventarioGlobal);
+  renderizarOrdenRequerimiento(listaInventarioGlobal);
+};
+
+// Renderizar Tabla con Inserción Segura en el DOM
+function renderizarTabla(items) {
+  const tbody = document.getElementById("tbodyInventario");
+  tbody.innerHTML = "";
+
+  if (items.length === 0) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td colspan="6" class="text-center text-muted py-3">No hay productos registrados en el inventario.</td>`;
+    tbody.appendChild(tr);
+    return;
+  }
+
+  items.forEach((item) => {
+    const tr = document.createElement("tr");
+    const esBajo = parseInt(item.cantidad) <= parseInt(item.stockMinimo);
+    const esBodega = (item.estadoActivo || 'En Bodega') === 'En Bodega';
+    
+    const textoUbicacion = esBodega 
+      ? sanitizeText(item.ubicacionBodega || 'Bodega General')
+      : `${sanitizeText(item.lugarAsignacion || 'Asignado')} (${sanitizeText(item.responsable || 'Sin custodio')})`;
+
+    tr.innerHTML = `
+      <td><strong class="font-mono">${sanitizeText(item.codigo)}</strong></td>
+      <td>${sanitizeText(item.nombre)}</td>
+      <td>
+        <span class="badge ${esBodega ? 'bg-secondary' : 'bg-info text-dark'}">
+          ${sanitizeText(item.estadoActivo || 'En Bodega')}
+        </span>
+      </td>
+      <td><small>${textoUbicacion}</small></td>
+      <td class="text-center">
+        <div class="btn-group btn-group-sm" role="group">
+          <button class="btn btn-outline-danger px-2" onclick="modificarStockRápido('${item.idFirebase}', -1)" title="-1 unidad">-</button>
+          <span class="btn btn-light fw-bold disabled px-3 ${esBajo ? 'text-danger' : 'text-dark'}">${parseInt(item.cantidad)}</span>
+          <button class="btn btn-outline-success px-2" onclick="modificarStockRápido('${item.idFirebase}', 1)" title="+1 unidad">+</button>
+        </div>
+      </td>
+      <td class="text-center">
+        <button class="btn btn-sm btn-outline-warning me-1" onclick="prepararEdicion('${item.idFirebase}')" title="Editar">
+          <i class="fa-solid fa-pen"></i>
+        </button>
+        <button class="btn btn-sm btn-outline-danger" onclick="confirmarEliminacion('${item.idFirebase}')" title="Eliminar">
+          <i class="fa-solid fa-trash"></i>
+        </button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// Invocado por Firebase al cambiar el estado del Kárdex
+window.renderizarMovimientos = function(data) {
+  const tbody = document.getElementById("tbodyMovimientos");
+  tbody.innerHTML = "";
+
+  // Ordenar del evento más reciente al más antiguo
+  data.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+
+  if (data.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted py-3">No hay registro de movimientos.</td></tr>`;
+    return;
+  }
+
+  data.forEach((mov) => {
+    const tr = document.createElement("tr");
+    const fechaFormatted = new Date(mov.fecha).toLocaleString("es-CO");
+    
+    let badgeClass = "bg-secondary";
+    if (mov.tipo === "Registro") badgeClass = "bg-success";
+    if (mov.tipo === "Entrada (+1)") badgeClass = "bg-primary";
+    if (mov.tipo === "Salida (-1)") badgeClass = "bg-warning text-dark";
+    if (mov.tipo === "Eliminación") badgeClass = "bg-danger";
+
+    tr.innerHTML = `
+      <td><small class="text-muted">${sanitizeText(fechaFormatted)}</small></td>
+      <td><strong class="font-mono">${sanitizeText(mov.codigo)}</strong></td>
+      <td>${sanitizeText(mov.nombre)}</td>
+      <td><span class="badge ${badgeClass}">${sanitizeText(mov.tipo)}</span></td>
+      <td class="fw-bold">${parseInt(mov.cantidad)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+};
+
+// Manejo del Formulario (Guardado / Edición)
+function manejarGuardado(e) {
+  e.preventDefault();
+
+  const idFirebase = document.getElementById("itemIdFirebase").value;
+  const cantidadVal = parseInt(document.getElementById("cantidad").value);
+  const stockMinVal = parseInt(document.getElementById("stockMinimo").value);
+
+  // Validación de seguridad de enteros positivos
+  if (isNaN(cantidadVal) || cantidadVal < 0 || isNaN(stockMinVal) || stockMinVal < 0) {
+    alert("Las cantidades deben ser números enteros no negativos.");
+    return;
+  }
+
+  const itemData = {
+    categoria: sanitizeText(document.getElementById("categoria").value),
+    codigo: sanitizeText(document.getElementById("codigo").value.trim()),
+    nombre: sanitizeText(document.getElementById("nombre").value.trim()),
+    estadoActivo: sanitizeText(document.getElementById("estadoActivo").value),
+    ubicacionBodega: sanitizeText(document.getElementById("ubicacionBodega").value.trim()),
+    lugarAsignacion: sanitizeText(document.getElementById("lugarAsignacion").value.trim()),
+    responsable: sanitizeText(document.getElementById("responsable").value.trim()),
+    cantidad: cantidadVal,
+    stockMinimo: stockMinVal,
+    ultimaActualizacion: new Date().toISOString()
+  };
+
+  const esEdicion = !!idFirebase;
+
+  if (window.guardarItemFirebase) {
+    window.guardarItemFirebase(itemData, idFirebase ? idFirebase : null)
+      .then(() => {
+        if (window.registrarMovimientoFirebase) {
+          window.registrarMovimientoFirebase({
+            codigo: itemData.codigo,
+            nombre: itemData.nombre,
+            tipo: esEdicion ? "Edición" : "Registro",
+            cantidad: itemData.cantidad
+          });
+        }
+        resetearFormulario();
+      })
+      .catch((err) => {
+        console.error("Error al guardar en Firebase: ", err);
+        alert("Error de conexión al guardar el registro.");
+      });
+  }
+}
+
+// Incremento / Decremento Concurrente
+window.modificarStockRápido = function(idFirebase, delta) {
+  const item = listaInventarioGlobal.find(i => i.idFirebase === idFirebase);
+  if (!item) return;
+
+  if (window.modificarStockAtomico) {
+    window.modificarStockAtomico(idFirebase, delta)
+      .then(() => {
+        if (window.registrarMovimientoFirebase) {
+          window.registrarMovimientoFirebase({
+            codigo: item.codigo,
+            nombre: item.nombre,
+            tipo: delta > 0 ? "Entrada (+1)" : "Salida (-1)",
+            cantidad: 1
+          });
+        }
+      })
+      .catch(err => console.error("Error en transacción atómica: ", err));
+  }
+};
+
+window.prepararEdicion = function(idFirebase) {
+  const item = listaInventarioGlobal.find(i => i.idFirebase === idFirebase);
+  if (!item) return;
+
+  document.getElementById("itemIdFirebase").value = item.idFirebase;
+  document.getElementById("categoria").value = item.categoria || '';
+  document.getElementById("codigo").value = item.codigo;
+  document.getElementById("nombre").value = item.nombre;
+  document.getElementById("estadoActivo").value = item.estadoActivo || 'En Bodega';
+  
+  toggleCamposUbicacion(item.estadoActivo || 'En Bodega');
+
+  document.getElementById("ubicacionBodega").value = item.ubicacionBodega || '';
+  document.getElementById("lugarAsignacion").value = item.lugarAsignacion || '';
+  document.getElementById("responsable").value = item.responsable || '';
+  document.getElementById("cantidad").value = item.cantidad;
+  document.getElementById("stockMinimo").value = item.stockMinimo;
+
+  document.getElementById("btnGuardar").innerHTML = `<i class="fa-solid fa-pen-to-square me-1"></i> Actualizar Registro`;
+  document.getElementById("btnCancelarEdicion").classList.remove("d-none");
+};
+
+function resetearFormulario() {
+  document.getElementById("formInventario").reset();
+  document.getElementById("itemIdFirebase").value = "";
+  toggleCamposUbicacion("En Bodega");
+  document.getElementById("btnGuardar").innerHTML = `<i class="fa-solid fa-floppy-disk me-1"></i> Guardar Registro`;
+  document.getElementById("btnCancelarEdicion").classList.add("d-none");
+}
+
+window.confirmarEliminacion = function(idFirebase) {
+  const item = listaInventarioGlobal.find(i => i.idFirebase === idFirebase);
+  if (!item) return;
+
+  if (confirm(`¿Confirma eliminar el registro (${item.codigo}) ${item.nombre}?`)) {
+    if (window.eliminarItemFirebase) {
+      window.eliminarItemFirebase(idFirebase)
+        .then(() => {
+          if (window.registrarMovimientoFirebase) {
+            window.registrarMovimientoFirebase({
+              codigo: item.codigo,
+              nombre: item.nombre,
+              tipo: "Eliminación",
+              cantidad: item.cantidad
+            });
+          }
+        })
+        .catch(err => console.error("Error al eliminar registro: ", err));
+    }
+  }
+};
+
+// Control de Lector de Cámara
+function iniciarCamaraEscaner() {
+  html5QrCode = new Html5Qrcode("reader");
+  const config = { fps: 10, qrbox: { width: 250, height: 150 } };
+
+  html5QrCode.start(
+    { facingMode: "environment" },
+    config,
+    (decodedText) => {
+      document.getElementById("codigo").value = sanitizeText(decodedText);
+      emitirBeepConfirmacion();
+      
+      const modal = bootstrap.Modal.getInstance(document.getElementById('modalEscaner'));
+      if (modal) modal.hide();
+    },
+    () => {}
+  ).catch(err => {
+    console.error("Error al iniciar la cámara: ", err);
+    alert("No se pudo iniciar la cámara. Verifique los permisos en el navegador.");
+  });
+}
+
+function detenerCamaraEscaner() {
+  if (html5QrCode && html5QrCode.isScanning) {
+    html5QrCode.stop().then(() => {
+      html5QrCode.clear();
+    }).catch(err => console.error("Error deteniendo el visor de cámara: ", err));
+  }
+}
+
+// Alertas Stock Mínimo
+function actualizarAlertas(items) {
+  const tbodyAlertas = document.getElementById("tbodyAlertas");
+  const badge = document.getElementById("badgeAlertas");
+  tbodyAlertas.innerHTML = "";
+
+  const criticos = items.filter(i => parseInt(i.cantidad) <= parseInt(i.stockMinimo));
+
+  if (criticos.length > 0) {
+    badge.textContent = criticos.length;
+    badge.classList.remove("d-none");
+  } else {
+    badge.classList.add("d-none");
+  }
+
+  if (criticos.length === 0) {
+    tbodyAlertas.innerHTML = `<tr><td colspan="5" class="text-center text-success py-3"><i class="fa-solid fa-circle-check me-1"></i> No existen productos bajo el stock mínimo.</td></tr>`;
+    return;
+  }
+
+  criticos.forEach(item => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><strong class="font-mono">${sanitizeText(item.codigo)}</strong></td>
+      <td>${sanitizeText(item.nombre)}</td>
+      <td><span class="badge bg-danger">${parseInt(item.cantidad)}</span></td>
+      <td>${parseInt(item.stockMinimo)}</td>
+      <td><span class="text-danger fw-bold"><i class="fa-solid fa-circle-exclamation me-1"></i> Reabastecer</span></td>
+    `;
+    tbodyAlertas.appendChild(tr);
+  });
+}
+
+// Orden de Requerimiento (Sin logo)
+function renderizarOrdenRequerimiento(items) {
+  const tbodyReq = document.getElementById("tbodyOrdenRequerimiento");
+  tbodyReq.innerHTML = "";
+
+  const reponer = items.filter(i => parseInt(i.cantidad) <= parseInt(i.stockMinimo));
+
+  if (reponer.length === 0) {
+    tbodyReq.innerHTML = `<tr><td colspan="5" class="text-center text-muted py-3">Todos los productos tienen existencias suficientes.</td></tr>`;
+    return;
+  }
+
+  reponer.forEach(item => {
+    const sugerido = (parseInt(item.stockMinimo) * 2) - parseInt(item.cantidad);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="font-mono">${sanitizeText(item.codigo)}</td>
+      <td>${sanitizeText(item.nombre)}</td>
+      <td class="text-center">${parseInt(item.cantidad)}</td>
+      <td class="text-center">${parseInt(item.stockMinimo)}</td>
+      <td class="text-center fw-bold text-primary">${sugerido > 0 ? sugerido : parseInt(item.stockMinimo)}</td>
+    `;
+    tbodyReq.appendChild(tr);
+  });
+}
+
+function actualizarFechaFolioOrden() {
+  const hoy = new Date();
+  document.getElementById("reqFecha").textContent = hoy.toLocaleDateString("es-CO");
+  document.getElementById("reqFolio").textContent = `#REQ-${hoy.getFullYear()}${(hoy.getMonth()+1).toString().padStart(2, '0')}-${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
+// Exportaciones
+function exportarExcel() {
+  const dataExport = listaInventarioGlobal.map(item => ({
+    "Código": item.codigo,
+    "Nombre": item.nombre,
+    "Categoría": item.categoria || 'N/A',
+    "Estado": item.estadoActivo || 'En Bodega',
+    "Ubicación Bodega": item.ubicacionBodega || 'N/A',
+    "Lugar Asignación": item.lugarAsignacion || 'N/A',
+    "Responsable": item.responsable || 'N/A',
+    "Cantidad": item.cantidad,
+    "Stock Mínimo": item.stockMinimo
+  }));
+
+  const worksheet = XLSX.utils.json_to_sheet(dataExport);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Inventario");
+  XLSX.writeFile(workbook, "Inventario_General.xlsx");
+}
+
+function exportarWord() {
+  const { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, WidthType } = window.docx;
+
+  const tableRows = [
+    new TableRow({
+      children: [
+        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Código", bold: true })] })] }),
+        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Producto", bold: true })] })] }),
+        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Estado", bold: true })] })] }),
+        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Cantidad", bold: true })] })] }),
+      ],
+    }),
+  ];
+
+  listaInventarioGlobal.forEach(item => {
+    tableRows.push(
+      new TableRow({
+        children: [
+          new TableCell({ children: [new Paragraph(item.codigo || '')] }),
+          new TableCell({ children: [new Paragraph(item.nombre || '')] }),
+          new TableCell({ children: [new Paragraph(item.estadoActivo || 'En Bodega')] }),
+          new TableCell({ children: [new Paragraph(String(item.cantidad || 0))] }),
+        ],
+      })
+    );
+  });
+
+  const doc = new Document({
+    sections: [{
+      properties: {},
+      children: [
+        new Paragraph({
+          children: [new TextRun({ text: "Reporte de Inventario de Activos", bold: true, size: 30 })],
+          space: { after: 300 }
+        }),
+        new Table({
+          rows: tableRows,
+          width: { size: 100, type: WidthType.PERCENTAGE }
+        })
+      ]
+    }]
+  });
+
+  Packer.toBlob(doc).then(blob => {
+    saveAs(blob, "Reporte_Inventario.docx");
+  });
+}
+
+function exportarPDF() {
+  const elemento = document.getElementById("ordenDocumento");
+  const opt = {
+    margin:       0.5,
+    filename:     'Orden_Requerimiento.pdf',
+    image:        { type: 'jpeg', quality: 0.98 },
+    html2canvas:  { scale: 2 },
+    jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' }
+  };
+
+  html2pdf().set(opt).from(elemento).save();
 }
