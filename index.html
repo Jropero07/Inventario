@@ -81,7 +81,7 @@
           <div class="field"><label for="modelo">Modelo</label><input id="modelo" maxlength="100"></div>
           <div class="field"><label for="serial">Número de serie</label><input id="serial" maxlength="100"></div>
           <div class="field"><label for="fechaIngreso">Fecha de ingreso</label><input id="fechaIngreso" type="date"></div>
-          <div class="field"><label for="fechaEgreso">Fecha de egreso</label><input id="fechaEgreso" type="date"></div>
+          <div id="assignmentDateField" class="field hidden"><label for="fechaAsignacion">Fecha de asignación</label><input id="fechaAsignacion" type="date"></div>
 
           <div class="field"><label for="estado">Estado</label>
             <select id="estado">
@@ -167,10 +167,21 @@
 
       <section id="movimientos" class="panel">
         <div class="panel-head"><div><h2>Historial de Movimientos</h2><p>Kárdex y auditoría de las operaciones registradas.</p></div></div>
+        <div class="filters movement-filters">
+          <input id="movementSearchName" type="search" placeholder="Buscar por nombre...">
+          <input id="movementSearchSku" type="search" placeholder="Buscar por SKU / código...">
+          <input id="movementSearchSerial" type="search" placeholder="Buscar por serial...">
+          <input id="movementDateFrom" type="date" title="Fecha desde">
+          <input id="movementDateTo" type="date" title="Fecha hasta">
+          <select id="movementType"><option value="">Todos los tipos</option><option value="Activo">Activo</option><option value="Consumible">Consumible</option></select>
+          <select id="movementAction"><option value="">Todas las acciones</option><option value="Entrada">Entrada</option><option value="Salida">Salida</option><option value="Registro">Registro</option><option value="Edición">Edición</option><option value="Eliminación">Eliminación</option></select>
+          <input id="movementSearchDestination" type="search" placeholder="Buscar destino / lugar...">
+          <button id="clearMovementFiltersBtn" class="btn secondary" type="button">Limpiar filtros</button>
+        </div>
         <div class="table-card"><div class="table-wrap">
-          <table><thead><tr><th>Fecha / Hora</th><th>Código</th><th>Nombre</th><th>Acción</th><th>Cantidad</th><th>Espacio / Destino</th></tr></thead>
+          <table><thead><tr><th>Fecha / Hora</th><th>Tipo</th><th>SKU / Código</th><th>Serial</th><th>Nombre</th><th>Acción</th><th>Cantidad</th><th>Espacio / Destino</th></tr></thead>
           <tbody id="movementTableBody"></tbody></table>
-        </div></div>
+        </div><p id="movementCount" class="table-note">0 movimientos</p></div>
       </section>
     </main>
   </div>

@@ -64,12 +64,11 @@ function normalizeItem(raw) {
     modelo: sanitizeText(raw.modelo, LIMITS.modelo),
     serial: sanitizeText(raw.serial, LIMITS.serial),
     fechaIngreso: sanitizeText(raw.fechaIngreso, 20),
-    fechaEgreso: sanitizeText(raw.fechaEgreso, 20),
+    fechaAsignacion: sanitizeText(raw.fechaAsignacion || raw.fechaEgreso, 20),
     estado: ["Disponible","Asignado","En mantenimiento","Baja"].includes(raw.estado) ? raw.estado : "Disponible",
     espacio: sanitizeText(raw.espacio, LIMITS.espacio),
     responsable: sanitizeText(raw.responsable, LIMITS.responsable),
     unidad: sanitizeText(raw.unidad, LIMITS.unidad),
-    espacio: sanitizeText(raw.espacio, LIMITS.espacio),
     stockActual: Number.isSafeInteger(raw.stockActual) && raw.stockActual >= 0 ? raw.stockActual : 0,
     stockMinimo: Number.isSafeInteger(raw.stockMinimo) && raw.stockMinimo >= 0 ? raw.stockMinimo : 0,
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
@@ -89,9 +88,11 @@ function buildItemFromForm(formKind) {
   const codigo=sanitizeText($("codigo").value,LIMITS.codigo), nombre=sanitizeText($("nombre").value,LIMITS.nombre);
   if(!codigo || !nombre) throw new Error("Código / SKU y nombre son obligatorios.");
   const estado=["Disponible","Asignado","En mantenimiento","Baja"].includes($("estado").value)?$("estado").value:"Disponible";
+  const fechaAsignacion=estado==="Asignado" ? sanitizeText($("fechaAsignacion").value,20) : "";
+  if(estado==="Asignado" && !fechaAsignacion) throw new Error("Indique la fecha de asignación del activo.");
   return normalizeItem({
     tipo:"Activo",codigo,nombre,categoria:sanitizeText($("categoria").value,LIMITS.categoria),marca:sanitizeText($("marca").value,LIMITS.marca),modelo:sanitizeText($("modelo").value,LIMITS.modelo),serial:sanitizeText($("serial").value,LIMITS.serial),
-    fechaIngreso:$("fechaIngreso").value,fechaEgreso:$("fechaEgreso").value,estado,
+    fechaIngreso:$("fechaIngreso").value,fechaAsignacion,estado,
     espacio:sanitizeText($("espacio").value,LIMITS.espacio),
     responsable:estado==="Asignado"?sanitizeText($("responsable").value,LIMITS.responsable):"",
     stockActual:0,stockMinimo:0,createdAt:Date.now(),updatedAt:Date.now()
@@ -100,8 +101,13 @@ function buildItemFromForm(formKind) {
 
 async function registrarMovimiento(item, tipoAccion, cantidad=0, espacioDestino="") {
   const movimiento={
-    fechaHora:Date.now(),codigo:sanitizeText(item.codigo,LIMITS.codigo),nombre:sanitizeText(item.nombre,LIMITS.nombre),
-    tipoAccion:sanitizeText(tipoAccion,40),cantidad:Number.isSafeInteger(cantidad)?Math.max(0,cantidad):0,
+    fechaHora:Date.now(),
+    tipo:sanitizeText(item.tipo,20),
+    codigo:sanitizeText(item.codigo,LIMITS.codigo),
+    serial:sanitizeText(item.serial,LIMITS.serial),
+    nombre:sanitizeText(item.nombre,LIMITS.nombre),
+    tipoAccion:sanitizeText(tipoAccion,40),
+    cantidad:Number.isSafeInteger(cantidad)?Math.max(0,cantidad):0,
     espacioDestino:sanitizeText(espacioDestino,LIMITS.espacio)
   };
   await set(push(movimientosRef), movimiento);
@@ -190,7 +196,6 @@ async function registrarMovimientoStock(idFirebase, delta, cantidad, destination
     return {
       ...current,
       stockActual:next,
-      espacio:destination,
       updatedAt:Date.now()
     };
   });
@@ -208,7 +213,7 @@ async function registrarMovimientoStock(idFirebase, delta, cantidad, destination
   if(finalStock===null) throw new Error("Firebase devolvió un stock no válido.");
 
   await registrarMovimiento(
-    { ...item, stockActual:finalStock, espacio:destination },
+    { ...item, stockActual:finalStock },
     delta>0 ? "Entrada" : "Salida",
     cantidad,
     destination
@@ -259,6 +264,11 @@ function renderizarInventario(items) {
 }
 window.renderizarInventario=renderizarInventario;
 
+function displayLocation(item) {
+  if(item.tipo === "Consumible" && item.stockActual <= 0) return "Sin stock";
+  return item.espacio || "Sin ubicación";
+}
+
 function filteredInventory() {
   const q=sanitizeText($("generalSearch").value,120).toLowerCase();
   const type=$("filterType").value;
@@ -266,15 +276,16 @@ function filteredInventory() {
   const cat=$("filterCategory").value;
   const space=$("filterSpace").value;
   return inventario.filter(i=>{
-    const hay=!q || [i.codigo,i.nombre,i.serial,i.marca,i.modelo,i.categoria,i.responsable,i.espacio].join(" ").toLowerCase().includes(q);
-    return hay && (!type||i.tipo===type) && (!status||i.estado===status) && (!cat||i.categoria===cat) && (!space||i.espacio===space);
+    const location=displayLocation(i);
+    const hay=!q || [i.codigo,i.nombre,i.serial,i.marca,i.modelo,i.categoria,i.responsable,location].join(" ").toLowerCase().includes(q);
+    return hay && (!type||i.tipo===type) && (!status||i.estado===status) && (!cat||i.categoria===cat) && (!space||location===space);
   });
 }
 
 function renderTableRow(item) {
   const tr=document.createElement("tr");
   addCell(tr,item.tipo); addCell(tr,item.codigo); addCell(tr,item.nombre); addCell(tr,item.categoria); addCell(tr,item.estado);
-  addCell(tr,item.espacio); addCell(tr,item.responsable);
+  addCell(tr,displayLocation(item)); addCell(tr,item.responsable);
   const stockTd=document.createElement("td");
   if(item.tipo==="Consumible") {
     const wrap=document.createElement("div"); wrap.className="stock-control";
@@ -322,7 +333,7 @@ function renderFilters() {
   const select=$("filterCategory"), spaceSelect=$("filterSpace");
   const current=select.value, currentSpace=spaceSelect.value;
   const cats=[...new Set(inventario.map(i=>i.categoria).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"es",{sensitivity:"base"}));
-  const spaces=[...new Set(inventario.map(i=>i.espacio).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"es",{sensitivity:"base"}));
+  const spaces=[...new Set(inventario.map(displayLocation).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"es",{sensitivity:"base"}));
   select.replaceChildren(new Option("Todas las categorías",""));
   spaceSelect.replaceChildren(new Option("Todos los espacios físicos",""));
   cats.forEach(c=>select.appendChild(new Option(c,c)));
@@ -338,9 +349,42 @@ function renderCriticals() {
   if(!critical.length){box.appendChild(makeEl("p","No hay consumibles en nivel crítico.","muted"));return}
   critical.forEach(i=>{const card=document.createElement("article");card.className="critical-item";card.append(makeEl("h3",i.nombre),makeEl("p",`Código: ${i.codigo}`),makeEl("p",`Stock actual: ${i.stockActual}`,"critical-number"),makeEl("p",`Stock mínimo: ${i.stockMinimo}`));box.appendChild(card)});
 }
+function movementActionCategory(m) {
+  const action=String(m.tipoAccion||"");
+  if(/^Entrada/.test(action)) return "Entrada";
+  if(/^Salida/.test(action)) return "Salida";
+  return action;
+}
+
+function filteredMovements() {
+  const name=sanitizeText($("movementSearchName").value,120).toLowerCase();
+  const sku=sanitizeText($("movementSearchSku").value,120).toLowerCase();
+  const serial=sanitizeText($("movementSearchSerial").value,120).toLowerCase();
+  const from=$("movementDateFrom").value;
+  const to=$("movementDateTo").value;
+  const type=$("movementType").value;
+  const action=$("movementAction").value;
+  const destination=sanitizeText($("movementSearchDestination").value,120).toLowerCase();
+  const fromTs=from ? new Date(`${from}T00:00:00`).getTime() : null;
+  const toTs=to ? new Date(`${to}T23:59:59.999`).getTime() : null;
+  return movimientos.filter(m=>{
+    const ts=Number(m.fechaHora)||0;
+    const hayName=!name || String(m.nombre||"").toLowerCase().includes(name);
+    const haySku=!sku || String(m.codigo||"").toLowerCase().includes(sku);
+    const haySerial=!serial || String(m.serial||"").toLowerCase().includes(serial);
+    const hayDate=(fromTs===null || ts>=fromTs) && (toTs===null || ts<=toTs);
+    const hayType=!type || String(m.tipo||"")===type;
+    const hayAction=!action || movementActionCategory(m)===action;
+    const hayDestination=!destination || String(m.espacioDestino||"").toLowerCase().includes(destination);
+    return hayName&&haySku&&haySerial&&hayDate&&hayType&&hayAction&&hayDestination;
+  });
+}
+
 function renderMovements() {
   const body=$("movementTableBody");body.replaceChildren();
-  movimientos.slice().sort((a,b)=>(b.fechaHora||0)-(a.fechaHora||0)).forEach(m=>{const tr=document.createElement("tr");addCell(tr,fmtDateTime(m.fechaHora));addCell(tr,m.codigo);addCell(tr,m.nombre);addCell(tr,m.tipoAccion);addCell(tr,String(m.cantidad));addCell(tr,m.espacioDestino);body.appendChild(tr)});
+  const data=filteredMovements().sort((a,b)=>(b.fechaHora||0)-(a.fechaHora||0));
+  data.forEach(m=>{const tr=document.createElement("tr");addCell(tr,fmtDateTime(m.fechaHora));addCell(tr,m.tipo||"—");addCell(tr,m.codigo);addCell(tr,m.serial||"—");addCell(tr,m.nombre);addCell(tr,m.tipoAccion);addCell(tr,String(m.cantidad));addCell(tr,m.espacioDestino||"—");body.appendChild(tr)});
+  $("movementCount").textContent=`${data.length} movimientos`;
 }
 
 function editItem(item) {
@@ -377,7 +421,7 @@ function editItem(item) {
   $("modelo").value=item.modelo;
   $("serial").value=item.serial;
   $("fechaIngreso").value=item.fechaIngreso;
-  $("fechaEgreso").value=item.fechaEgreso;
+  $("fechaAsignacion").value=item.fechaAsignacion;
   $("estado").value=item.estado;
   $("espacio").value=item.espacio;
   $("responsable").value=item.responsable;
@@ -392,7 +436,15 @@ function clearAssetForm(){
   $("saveItemBtn").textContent="Guardar activo";
   toggleLocationFields();
 }
-function toggleLocationFields(){const assigned=$("estado").value==="Asignado";$("responsableField").classList.toggle("hidden",!assigned)}
+function toggleLocationFields(){
+  const assigned=$("estado").value==="Asignado";
+  $("responsableField").classList.toggle("hidden",!assigned);
+  $("assignmentDateField").classList.toggle("hidden",!assigned);
+  $("responsable").required=assigned;
+  $("fechaAsignacion").required=assigned;
+  if(assigned && !$("fechaAsignacion").value) $("fechaAsignacion").value=new Date().toISOString().slice(0,10);
+  if(!assigned) $("fechaAsignacion").value="";
+}
 
 function duplicateItem(item) {
   assetEditingId="";
@@ -421,7 +473,7 @@ function duplicateItem(item) {
   $("modelo").value=item.modelo;
   $("serial").value="";
   $("fechaIngreso").value="";
-  $("fechaEgreso").value="";
+  $("fechaAsignacion").value="";
   $("estado").value="Disponible";
   $("espacio").value=item.espacio;
   $("responsable").value="";
@@ -634,13 +686,13 @@ function exportRows(){
     Modelo:i.modelo,
     Serial:i.serial,
     Estado:i.estado,
-    "Espacio Físico / Ubicación":i.espacio,
+    "Espacio Físico / Ubicación":displayLocation(i),
     Responsable:i.responsable,
     Unidad:i.unidad,
     Stock:i.tipo==="Consumible"?i.stockActual:"",
     "Stock Mínimo":i.tipo==="Consumible"?i.stockMinimo:"",
     "Fecha de Ingreso":i.fechaIngreso,
-    "Fecha de Egreso":i.fechaEgreso
+    "Fecha de Asignación":i.fechaAsignacion
   }));
 }
 
@@ -661,7 +713,7 @@ function exportPdf(){
   const subtitle=makeEl("p",`Exportado: ${new Date().toLocaleString("es-CO")} · ${rows.length} registros`); subtitle.style.margin="0 0 14px"; subtitle.style.color="#555555"; wrap.appendChild(subtitle);
 
   const table=document.createElement("table"); table.style.width="100%"; table.style.borderCollapse="collapse"; table.style.fontSize="9px";
-  const headers=["Tipo","Código","Nombre","Categoría","Marca","Modelo","Serial","Estado","Espacio / Ubicación","Responsable","Unidad","Stock","Stock Mínimo","Fecha de Ingreso","Fecha de Egreso"];
+  const headers=["Tipo","Código","Nombre","Categoría","Marca","Modelo","Serial","Estado","Espacio / Ubicación","Responsable","Unidad","Stock","Stock Mínimo","Fecha de Ingreso","Fecha de Asignación"];
   const thead=document.createElement("thead"),hr=document.createElement("tr");
   headers.forEach(h=>{const th=makeEl("th",h);th.style.border="1px solid #bfc7d4";th.style.padding="5px";th.style.background="#eef2f7";th.style.textAlign="left";hr.appendChild(th)}); thead.appendChild(hr); table.appendChild(thead);
   const tbody=document.createElement("tbody");
@@ -696,7 +748,7 @@ async function exportOrderWord(){
 }
 
 function exportJson(){const data={inventario,movimientos,exportadoEn:Date.now()};const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});saveAs(blob,"backup_inventario.json")}
-async function importJson(file){if(!file)return;try{const data=JSON.parse(await file.text());if(!Array.isArray(data.inventario))throw new Error();if(!confirm("Esto agregará los registros del respaldo a Firebase. ¿Continuar?"))return;for(const raw of data.inventario){const item=normalizeItem(raw);delete item.idFirebase;await set(push(inventarioRef),item)}if(Array.isArray(data.movimientos)){for(const m of data.movimientos)await set(push(movimientosRef),{fechaHora:Number(m.fechaHora)||Date.now(),codigo:sanitizeText(m.codigo,LIMITS.codigo),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)})}showToast("Copia importada correctamente.");}catch{showToast("Archivo JSON inválido.",true)}}
+async function importJson(file){if(!file)return;try{const data=JSON.parse(await file.text());if(!Array.isArray(data.inventario))throw new Error();if(!confirm("Esto agregará los registros del respaldo a Firebase. ¿Continuar?"))return;for(const raw of data.inventario){const item=normalizeItem(raw);delete item.idFirebase;await set(push(inventarioRef),item)}if(Array.isArray(data.movimientos)){for(const m of data.movimientos)await set(push(movimientosRef),{fechaHora:Number(m.fechaHora)||Date.now(),tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)})}showToast("Copia importada correctamente.");}catch{showToast("Archivo JSON inválido.",true)}}
 function activateTab(id){document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===id));document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x.dataset.tab===id))}
 
 $("globalSearch").addEventListener("input",()=>{
@@ -707,7 +759,9 @@ $("globalSearch").addEventListener("input",()=>{
 
 document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>activateTab(b.dataset.tab)));
 ["generalSearch","filterType","filterStatus","filterCategory","filterSpace"].forEach(id=>$(id).addEventListener("input",renderGeneralInventoryTable));
+["movementSearchName","movementSearchSku","movementSearchSerial","movementDateFrom","movementDateTo","movementType","movementAction","movementSearchDestination"].forEach(id=>$(id).addEventListener("input",renderMovements));
 $("clearFiltersBtn").addEventListener("click",()=>{$("generalSearch").value="";$("filterType").value="";$("filterStatus").value="";$("filterCategory").value="";$("filterSpace").value="";renderGeneralInventoryTable()});
+$("clearMovementFiltersBtn").addEventListener("click",()=>{["movementSearchName","movementSearchSku","movementSearchSerial","movementDateFrom","movementDateTo","movementType","movementAction","movementSearchDestination"].forEach(id=>$(id).value="");renderMovements()});
 $("estado").addEventListener("change",toggleLocationFields);$("generateSkuBtn").addEventListener("click",generateSku);$("generateConsumableSkuBtn").addEventListener("click",generateConsumableSku);$("scanBtn").addEventListener("click",startScanner);$("closeScannerBtn").addEventListener("click",stopScanner);
 $("scannerModal").addEventListener("click",e=>{if(e.target===$("scannerModal"))stopScanner()});$("orderModal").addEventListener("click",e=>{if(e.target===$("orderModal"))closeOrder()});$("closeOrderModal").addEventListener("click",closeOrder);
 $("movementModal").addEventListener("click",e=>{if(e.target===$("movementModal"))closeMovementModal()});$("closeMovementModal").addEventListener("click",closeMovementModal);$("cancelMovementBtn").addEventListener("click",closeMovementModal);$("movementForm").addEventListener("submit",submitMovement);
@@ -755,5 +809,5 @@ $("exportExcelBtn").addEventListener("click",exportExcel);$("exportPdfBtn").addE
 window.addEventListener("beforeunload",()=>{if(scannerRunning&&scanner)scanner.stop().catch(()=>{})});
 
 onValue(inventarioRef,snapshot=>{const data=snapshot.val()||{};renderizarInventario(Object.entries(data).map(([id,v])=>({...(v||{}),idFirebase:id})));},err=>{setSync("Error de conexión","error");showToast("Firebase rechazó la lectura. Revise las reglas.",true)});
-onValue(movimientosRef,snapshot=>{const data=snapshot.val()||{};movimientos=Object.values(data).map(m=>({fechaHora:Number(m.fechaHora)||0,codigo:sanitizeText(m.codigo,LIMITS.codigo),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)}));renderMovements();},()=>setSync("Error de movimientos","error"));
+onValue(movimientosRef,snapshot=>{const data=snapshot.val()||{};movimientos=Object.values(data).map(m=>({fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)}));renderMovements();},()=>setSync("Error de movimientos","error"));
 toggleLocationFields();
