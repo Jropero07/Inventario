@@ -21,7 +21,8 @@ let inventario = [];
 let movimientos = [];
 let scanner = null;
 let scannerRunning = false;
-let currentEditingId = "";
+let assetEditingId = "";
+let consumableEditingId = "";
 let orderCounter = 1;
 
 const LIMITS = { codigo:80, nombre:140, categoria:80, marca:80, modelo:100, serial:100, espacio:120, responsable:120, unidad:40 };
@@ -104,19 +105,29 @@ async function registrarMovimiento(item, tipoAccion, cantidad=0, espacioDestino=
   await set(push(movimientosRef), movimiento);
 }
 
+function toFirebasePayload(item) {
+  const clean = normalizeItem(item);
+  delete clean.idFirebase;
+  return clean;
+}
+
 async function guardarItemFirebase(item, existingId="") {
-  const clean=normalizeItem(item);
+  const clean=toFirebasePayload(item);
   const id=String(existingId || "").trim();
 
   if(id) {
     const before=inventario.find(x=>x.idFirebase===id);
     if(!before) throw new Error("No se encontró el registro original para editarlo. Vuelva a cargar la página e inténtelo de nuevo.");
 
-    clean.idFirebase=id;
-    clean.createdAt=before.createdAt;
+    clean.createdAt=Number.isFinite(before.createdAt) ? before.createdAt : Date.now();
     clean.updatedAt=Date.now();
     await update(ref(db,`inventario/${id}`), clean);
-    await registrarMovimiento(clean,"Edición", Math.abs(clean.tipo==="Consumible" ? clean.stockActual-before.stockActual : 0), clean.espacio);
+    await registrarMovimiento(
+      { ...clean, idFirebase:id },
+      "Edición",
+      Math.abs(clean.tipo==="Consumible" ? (safeInt(clean.stockActual) ?? 0) - (safeInt(before.stockActual) ?? 0) : 0),
+      clean.espacio
+    );
     return;
   }
 
@@ -124,7 +135,7 @@ async function guardarItemFirebase(item, existingId="") {
   clean.createdAt=Date.now();
   clean.updatedAt=Date.now();
   await set(nuevo,clean);
-  await registrarMovimiento(clean,"Registro",clean.tipo==="Consumible"?clean.stockActual:1,clean.espacio);
+  await registrarMovimiento({ ...clean, idFirebase:nuevo.key },"Registro",clean.tipo==="Consumible"?clean.stockActual:1,clean.espacio);
 }
 window.guardarItemFirebase = guardarItemFirebase;
 
@@ -137,55 +148,61 @@ async function eliminarItemFirebase(idFirebase) {
 window.eliminarItemFirebase=eliminarItemFirebase;
 
 async function ajustarStock(idFirebase, delta) {
-  const item = inventario.find((entry) => entry.idFirebase === idFirebase);
-  if (!item || item.tipo !== "Consumible") return;
+  const id=String(idFirebase || "").trim();
+  const item=inventario.find(entry=>entry.idFirebase===id);
+  if(!item || item.tipo!=="Consumible") return;
 
-  const destination = window.prompt(
-    delta > 0 ? "Espacio/lugar de destino para la entrada:" : "Espacio/lugar de destino para la salida:",
+  const destination=window.prompt(
+    delta>0 ? "Espacio/lugar de destino para la entrada:" : "Espacio/lugar de destino para la salida:",
     item.espacio || ""
   );
+  if(destination===null){ showToast("Movimiento cancelado."); return; }
 
-  if (destination === null) {
-    showToast("Movimiento cancelado.");
+  const cleanDestination=sanitizeText(destination,LIMITS.espacio);
+  if(!cleanDestination && delta>0){ showToast("Indique el espacio o lugar de destino.",true); return; }
+
+  const itemRef=ref(db,`inventario/${id}`);
+  let committedSnapshot=null;
+
+  try {
+    const result=await runTransaction(itemRef,current=>{
+      if(current===null) return;
+      const currentStock=safeInt(current.stockActual);
+      if(currentStock===null) return;
+      const next=currentStock+delta;
+      if(!Number.isSafeInteger(next) || next<0) return;
+      return {
+        ...current,
+        stockActual:next,
+        espacio:cleanDestination,
+        updatedAt:Date.now()
+      };
+    });
+
+    if(!result.committed){
+      const latest=safeInt(result.snapshot?.val()?.stockActual);
+      if(delta<0 && latest===0) showToast("El stock ya está en 0; no se puede realizar otra salida.",true);
+      else showToast("No se pudo actualizar el stock. Intente nuevamente.",true);
+      return;
+    }
+
+    committedSnapshot=result.snapshot.val();
+  } catch(error) {
+    console.error("Error al actualizar stock:",error);
+    showToast("Firebase no permitió actualizar el stock. Revise las reglas de la base de datos.",true);
     return;
   }
 
-  const cleanDestination = sanitizeText(destination, LIMITS.espacio);
-  const target = ref(db, `inventario/${idFirebase}/stockActual`);
-
-  const result = await runTransaction(target, (current) => {
-    const actual = safeInt(current);
-    const currentStock = actual === null ? 0 : actual;
-    const next = currentStock + delta;
-    if (!Number.isSafeInteger(next) || next < 0) return;
-    return next;
-  });
-
-  if (!result.committed) {
-    showToast("No es posible dejar el stock en un valor negativo.", true);
-    return;
-  }
-
-  const finalStock = safeInt(result.snapshot.val());
-  if (finalStock === null) {
-    showToast("Firebase devolvió un stock no válido.", true);
-    return;
-  }
-
-  await update(ref(db, `inventario/${idFirebase}`), {
-    stockActual: finalStock,
-    espacio: cleanDestination,
-    updatedAt: Date.now()
-  });
+  const finalStock=safeInt(committedSnapshot?.stockActual);
+  if(finalStock===null){ showToast("Firebase devolvió un stock no válido.",true); return; }
 
   await registrarMovimiento(
-    { ...item, stockActual: finalStock, espacio: cleanDestination },
-    delta > 0 ? "Entrada (+1)" : "Salida (-1)",
+    { ...item, stockActual:finalStock, espacio:cleanDestination },
+    delta>0 ? "Entrada (+1)" : "Salida (-1)",
     1,
     cleanDestination
   );
-
-  showToast(delta > 0 ? "Entrada registrada." : "Salida registrada.");
+  showToast(delta>0 ? "Entrada registrada." : "Salida registrada.");
 }
 
 function addCell(tr,text,cls="") { tr.appendChild(makeEl("td",text,cls)); }
@@ -264,7 +281,15 @@ function renderMovements() {
 }
 
 function editItem(item) {
-  currentEditingId=item.idFirebase;
+  if(item.tipo==="Consumible") {
+    assetEditingId="";
+    $("editingId").value="";
+    consumableEditingId=item.idFirebase;
+  } else {
+    consumableEditingId="";
+    $("cEditingId").value="";
+    assetEditingId=item.idFirebase;
+  }
   activateTab(item.tipo==="Consumible"?"consumibles":"activos");
 
   if(item.tipo==="Consumible"){
@@ -300,14 +325,15 @@ function editItem(item) {
 function clearAssetForm(){
   $("assetForm").reset();
   $("editingId").value="";
-  currentEditingId="";
+  assetEditingId="";
   $("saveItemBtn").textContent="Guardar activo";
   toggleLocationFields();
 }
 function toggleLocationFields(){const assigned=$("estado").value==="Asignado";$("responsableField").classList.toggle("hidden",!assigned)}
 
 function duplicateItem(item) {
-  currentEditingId="";
+  assetEditingId="";
+  consumableEditingId="";
   if (item.tipo === "Consumible") {
     activateTab("consumibles");
     $("cEditingId").value="";
@@ -341,12 +367,32 @@ function duplicateItem(item) {
   showToast("Registro copiado. Código y serial quedaron vacíos.");
 }
 
-function generateSku() {
-  const cat=sanitizeText($("categoria").value,LIMITS.categoria).toUpperCase();
-  const aliases={CCTV:"CCTV",REDES:"RED",RED:"RED",AUDIO:"AUD",AUDIOVISUAL:"AUD",COMPUTO:"COMP",CÓMPUTO:"COMP"};
-  let prefix=aliases[cat] || cat.replace(/[^A-Z0-9]/g,"").slice(0,4) || "GEN";
-  const count=inventario.filter(i=>i.categoria.toUpperCase()===cat && i.codigo.startsWith(prefix+"-")).length+1;
-  $("codigo").value=`${prefix}-${String(count).padStart(3,"0")}`;
+function nextAvailableSku(prefix){
+  const used=new Set(inventario.map(i=>String(i.codigo||"").trim().toUpperCase()).filter(Boolean));
+  let n=1;
+  while(used.has(`${prefix}-${String(n).padStart(3,"0")}`)) n++;
+  return `${prefix}-${String(n).padStart(3,"0")}`;
+}
+
+function categoryPrefix(value,fallback="GEN"){
+  const cat=sanitizeText(value, LIMITS.categoria).toUpperCase();
+  const aliases={
+    CCTV:"CCTV", REDES:"RED", RED:"RED", AUDIO:"AUD", AUDIOVISUAL:"AUD",
+    COMPUTO:"COMP", CÓMPUTO:"COMP", CARGADORES:"CARG", CARGADOR:"CARG",
+    JACKS:"JACK", JACK:"JACK", CABLES:"CAB", CABLE:"CAB", CONECTORES:"CON",
+    ADAPTADORES:"ADAP", ADAPTADOR:"ADAP", ACCESORIOS:"ACC"
+  };
+  return aliases[cat] || cat.replace(/[^A-Z0-9]/g,"").slice(0,4) || fallback;
+}
+
+function generateSku(){
+  const prefix=categoryPrefix($("categoria").value,"ACT");
+  $("codigo").value=nextAvailableSku(prefix);
+}
+
+function generateConsumableSku(){
+  const prefix=categoryPrefix($("cCategoria").value,"CON");
+  $("cCodigo").value=nextAvailableSku(prefix);
 }
 
 function beep() {
@@ -371,56 +417,69 @@ function beep() {
   }
 }
 
-async function startScanner() {
-  if (window.isSecureContext === false) {
+async function startScanner(){
+  if(!window.isSecureContext){
     showToast("El escáner necesita HTTPS o localhost para usar la cámara.",true);
     return;
   }
-  if (!navigator.mediaDevices?.getUserMedia) {
+  if(!navigator.mediaDevices?.getUserMedia){
     showToast("Este navegador no permite acceso a la cámara.",true);
     return;
   }
-  if (!globalThis.Html5Qrcode) {
-    showToast("No se pudo cargar el módulo del escáner. Revise su conexión y vuelva a intentar.",true);
+  if(!globalThis.Html5Qrcode){
+    showToast("No se cargó el módulo del escáner. Recargue la página e inténtelo de nuevo.",true);
     return;
   }
 
   await stopScanner();
   $("scannerModal").hidden=false;
   $("scannerModal").setAttribute("aria-hidden","false");
-  await new Promise(r=>setTimeout(r,80));
-
-  scanner=new globalThis.Html5Qrcode("reader");
-  const config={fps:10,qrbox:{width:260,height:180},aspectRatio:1.7778};
-  const onScan=async text=>{
-    $("codigo").value=sanitizeText(text,LIMITS.codigo);
-    beep();
-    await stopScanner();
-    showToast("Código detectado.");
-  };
+  await new Promise(r=>setTimeout(r,100));
 
   try {
-    // Primero se intenta la cámara trasera; si el dispositivo no acepta facingMode,
-    // se consulta la lista de cámaras y se usa la que parezca trasera.
-    try {
-      await scanner.start({facingMode:"environment"},config,onScan,()=>{});
-    } catch (firstError) {
-      const cameras=await globalThis.Html5Qrcode.getCameras();
-      if(!cameras?.length) throw firstError;
-      const rear=cameras.find(c=>/back|rear|environment|trasera|posterior/i.test(c.label)) || cameras[cameras.length-1];
-      await scanner.start(rear.id,config,onScan,()=>{});
-    }
+    // Obtener la lista de cámaras primero es el flujo recomendado por html5-qrcode
+    // y además fuerza la solicitud de permiso de cámara cuando todavía no existe.
+    const cameras=await globalThis.Html5Qrcode.getCameras();
+    if(!cameras?.length) throw new DOMException("No camera found","NotFoundError");
+
+    scanner=new globalThis.Html5Qrcode("reader",{verbose:false});
+    const rear=cameras.find(c=>/back|rear|environment|trasera|posterior/i.test(c.label));
+    const cameraId=(rear || cameras[0]).id;
+    const config={
+      fps:10,
+      qrbox:{width:260,height:180},
+      aspectRatio:1.7778,
+      rememberLastUsedCamera:true
+    };
+
+    const onScan=async text=>{
+      if(!scannerRunning) return;
+      $("codigo").value=sanitizeText(text,LIMITS.codigo);
+      beep();
+      await stopScanner();
+      showToast("Código detectado.");
+    };
+
+    await scanner.start(cameraId,config,onScan,()=>{});
     scannerRunning=true;
-  } catch (e) {
+  } catch(error){
+    const name=error?.name || "";
+    const message=String(error?.message || error || "");
     await stopScanner();
-    const name=e?.name || "Error";
-    let message="No se pudo abrir la cámara.";
-    if(name==="NotAllowedError" || name==="PermissionDeniedError") message="Permiso de cámara bloqueado. Permita la cámara para este sitio y vuelva a pulsar Escanear.";
-    else if(name==="NotFoundError") message="No se encontró una cámara disponible.";
-    else if(name==="NotReadableError") message="La cámara está siendo usada por otra aplicación o no está disponible.";
-    else if(name==="SecurityError") message="El navegador bloqueó el acceso a la cámara por seguridad. Use HTTPS.";
-    showToast(message,true);
-    console.error("Error del escáner:",e);
+    let text="No se pudo abrir la cámara.";
+    if(name==="NotAllowedError" || name==="PermissionDeniedError" || /permission|not allowed|denied/i.test(message)){
+      text="Permiso de cámara bloqueado. En Chrome: candado del sitio → Cámara → Permitir y recargue la página.";
+    } else if(name==="NotFoundError"){
+      text="No se encontró una cámara disponible en este dispositivo.";
+    } else if(name==="NotReadableError"){
+      text="La cámara está ocupada por otra aplicación. Cierre otras apps que la estén usando e inténtelo nuevamente.";
+    } else if(name==="SecurityError"){
+      text="El navegador bloqueó la cámara por seguridad. Use HTTPS.";
+    } else if(name==="OverconstrainedError"){
+      text="La cámara seleccionada no admite la configuración solicitada. Intente nuevamente.";
+    }
+    showToast(text,true);
+    console.error("Error del escáner:",error);
   }
 }
 
@@ -472,14 +531,14 @@ function activateTab(id){document.querySelectorAll(".panel").forEach(x=>x.classL
 document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>activateTab(b.dataset.tab)));
 ["globalSearch","filterType","filterStatus","filterCategory","filterSpace"].forEach(id=>$(id).addEventListener("input",renderInventoryTable));
 $("clearFiltersBtn").addEventListener("click",()=>{$("globalSearch").value="";$("filterType").value="";$("filterStatus").value="";$("filterCategory").value="";$("filterSpace").value="";renderInventoryTable()});
-$("estado").addEventListener("change",toggleLocationFields);$("generateSkuBtn").addEventListener("click",generateSku);$("scanBtn").addEventListener("click",startScanner);$("closeScannerBtn").addEventListener("click",stopScanner);
+$("estado").addEventListener("change",toggleLocationFields);$("generateSkuBtn").addEventListener("click",generateSku);$("generateConsumableSkuBtn").addEventListener("click",generateConsumableSku);$("scanBtn").addEventListener("click",startScanner);$("closeScannerBtn").addEventListener("click",stopScanner);
 $("scannerModal").addEventListener("click",e=>{if(e.target===$("scannerModal"))stopScanner()});$("orderModal").addEventListener("click",e=>{if(e.target===$("orderModal"))closeOrder()});$("closeOrderModal").addEventListener("click",closeOrder);
 document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("scannerModal").hidden)stopScanner();if(!$("orderModal").hidden)closeOrder()}});
 $("assetForm").addEventListener("submit",async e=>{
   e.preventDefault();
   try {
     const item=buildItemFromForm("Activo");
-    const id=String(currentEditingId || $("editingId").value || "").trim();
+    const id=String(assetEditingId || $("editingId").value || "").trim();
     if(id){
       const previous=inventario.find(x=>x.idFirebase===id);
       if(!previous) throw new Error("El registro que intenta editar ya no está disponible. Recargue la página.");
@@ -496,7 +555,7 @@ $("consumableForm").addEventListener("submit",async e=>{
   e.preventDefault();
   try {
     const item=buildItemFromForm("Consumible");
-    const id=String(currentEditingId || $("cEditingId").value || "").trim();
+    const id=String(consumableEditingId || $("cEditingId").value || "").trim();
     if(id){
       const previous=inventario.find(x=>x.idFirebase===id);
       if(!previous) throw new Error("El consumible que intenta editar ya no está disponible. Recargue la página.");
@@ -505,17 +564,17 @@ $("consumableForm").addEventListener("submit",async e=>{
     await guardarItemFirebase(item,id);
     $("consumableForm").reset();
     $("cEditingId").value="";
-    currentEditingId="";
+    consumableEditingId="";
     showToast(id?"Cambios guardados correctamente.":"Consumible registrado.");
   } catch(err) {
     showToast(err.message||"No se pudo guardar.",true);
   }
 });
-$("cancelEditBtn").addEventListener("click",clearAssetForm);$("clearConsumableBtn").addEventListener("click",()=>{$("consumableForm").reset();$("cEditingId").value="";currentEditingId="";});
+$("cancelEditBtn").addEventListener("click",clearAssetForm);$("clearConsumableBtn").addEventListener("click",()=>{$("consumableForm").reset();$("cEditingId").value="";consumableEditingId="";});
 $("generateOrderBtn").addEventListener("click",openOrder);$("downloadOrderPdfBtn").addEventListener("click",()=>html2pdf().set({margin:8,filename:"orden_requerimiento.pdf",html2canvas:{scale:2},jsPDF:{unit:"mm",format:"a4"}}).from($("orderDocument")).save());$("downloadOrderWordBtn").addEventListener("click",exportOrderWord);
 $("exportExcelBtn").addEventListener("click",exportExcel);$("exportPdfBtn").addEventListener("click",exportPdf);$("exportJsonBtn").addEventListener("click",exportJson);$("importJsonInput").addEventListener("change",e=>importJson(e.target.files[0]));
 window.addEventListener("beforeunload",()=>{if(scannerRunning&&scanner)scanner.stop().catch(()=>{})});
 
-onValue(inventarioRef,snapshot=>{const data=snapshot.val()||{};renderizarInventario(Object.entries(data).map(([id,v])=>({idFirebase:id,...v})));},err=>{setSync("Error de conexión","error");showToast("Firebase rechazó la lectura. Revise las reglas.",true)});
+onValue(inventarioRef,snapshot=>{const data=snapshot.val()||{};renderizarInventario(Object.entries(data).map(([id,v])=>({...(v||{}),idFirebase:id})));},err=>{setSync("Error de conexión","error");showToast("Firebase rechazó la lectura. Revise las reglas.",true)});
 onValue(movimientosRef,snapshot=>{const data=snapshot.val()||{};movimientos=Object.values(data).map(m=>({fechaHora:Number(m.fechaHora)||0,codigo:sanitizeText(m.codigo,LIMITS.codigo),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)}));renderMovements();},()=>setSync("Error de movimientos","error"));
 toggleLocationFields();
