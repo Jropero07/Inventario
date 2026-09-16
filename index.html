@@ -29,6 +29,7 @@
       <nav class="tabs" aria-label="Módulos del sistema">
         <button class="tab active" type="button" data-tab="activos"><span>Activos</span></button>
         <button class="tab" type="button" data-tab="consumibles"><span>Consumibles</span></button>
+        <button class="tab" type="button" data-tab="general"><span>Inventario General</span></button>
         <button class="tab" type="button" data-tab="alertas"><span>Alertas</span><span id="criticalBadge" class="badge">0</span></button>
         <button class="tab" type="button" data-tab="movimientos"><span>Historial de Movimientos</span></button>
       </nav>
@@ -59,10 +60,6 @@
         <div class="summary-grid" aria-label="Resumen de activos"><article class="summary-card"><span>Total activos</span><strong id="summaryTotal">0</strong></article><article class="summary-card"><span>Disponibles</span><strong id="summaryAvailable">0</strong></article><article class="summary-card"><span>Asignados</span><strong id="summaryAssigned">0</strong></article><article class="summary-card"><span>En mantenimiento</span><strong id="summaryMaintenance">0</strong></article></div>
         <div class="panel-head">
           <div><h2>Gestión de Activos Fijos</h2><p>Registre equipos, periféricos y demás activos institucionales.</p></div>
-          <div class="toolbar">
-            <button id="exportExcelBtn" class="btn secondary">Excel</button>
-            <button id="exportPdfBtn" class="btn secondary">PDF</button>
-          </div>
         </div>
 
         <form id="assetForm" class="card form-grid" novalidate>
@@ -104,8 +101,29 @@
           </div>
         </form>
 
-        <div class="filters">
-          <select id="filterType"><option value="">Todos los tipos</option><option>Activo</option><option>Consumible</option></select>
+        <div class="table-card">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Tipo</th><th>Código</th><th>Nombre</th><th>Categoría</th><th>Estado</th><th>Espacio / Ubicación</th><th>Responsable</th><th>Stock</th><th>Acciones</th></tr></thead>
+              <tbody id="inventoryTableBody"></tbody>
+            </table>
+          </div>
+          <p id="inventoryCount" class="table-note">0 registros</p>
+        </div>
+      </section>
+
+      <section id="general" class="panel">
+        <div class="panel-head">
+          <div><h2>Inventario General</h2><p>Consulte y filtre todos los activos y consumibles registrados.</p></div>
+          <div class="toolbar">
+            <button id="exportExcelBtn" class="btn secondary">Excel</button>
+            <button id="exportPdfBtn" class="btn secondary">PDF</button>
+          </div>
+        </div>
+
+        <div class="filters general-filters">
+          <input id="generalSearch" type="search" placeholder="Buscar por código, nombre, serial, marca...">
+          <select id="filterType"><option value="">Todos los tipos</option><option value="Activo">Activo</option><option value="Consumible">Consumible</option></select>
           <select id="filterStatus"><option value="">Todos los estados</option><option>Disponible</option><option>Asignado</option><option>En mantenimiento</option><option>Baja</option></select>
           <select id="filterCategory"><option value="">Todas las categorías</option></select>
           <select id="filterSpace"><option value="">Todos los espacios físicos</option></select>
@@ -116,10 +134,10 @@
           <div class="table-wrap">
             <table>
               <thead><tr><th>Tipo</th><th>Código</th><th>Nombre</th><th>Categoría</th><th>Estado</th><th>Espacio / Ubicación</th><th>Responsable</th><th>Stock</th><th>Acciones</th></tr></thead>
-              <tbody id="inventoryTableBody"></tbody>
+              <tbody id="generalInventoryTableBody"></tbody>
             </table>
           </div>
-          <p id="inventoryCount" class="table-note">0 registros</p>
+          <p id="generalInventoryCount" class="table-note">0 registros</p>
         </div>
       </section>
 
@@ -165,9 +183,35 @@
     </div>
   </div>
 
+  <div id="movementModal" class="modal-backdrop" hidden aria-hidden="true">
+    <div class="modal movement-modal" role="dialog" aria-modal="true" aria-labelledby="movementTitle">
+      <div class="modal-head"><h3 id="movementTitle">Registrar movimiento</h3><button id="closeMovementModal" type="button" class="icon-btn" aria-label="Cerrar">×</button></div>
+      <form id="movementForm" class="movement-form" novalidate>
+        <div class="movement-info">
+          <strong id="movementItemName">Artículo</strong>
+          <span id="movementItemCode">Código</span>
+          <span id="movementCurrentStock">Stock actual: 0</span>
+        </div>
+        <div class="field"><label for="movementQuantity">Cantidad</label><input id="movementQuantity" type="number" min="1" step="1" inputmode="numeric" value="1" required></div>
+        <div class="field"><label for="movementDestination">Espacio / Lugar de destino</label><input id="movementDestination" maxlength="120" required placeholder="Ej. Bodega TIC, Oficina 203"></div>
+        <div class="modal-actions">
+          <button id="cancelMovementBtn" type="button" class="btn secondary">Cancelar</button>
+          <button id="saveMovementBtn" type="submit" class="btn primary">Registrar movimiento</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div id="orderModal" class="modal-backdrop" hidden aria-hidden="true">
     <div class="modal order-modal">
-      <div class="modal-head"><h3>Vista previa de Orden de Requerimiento</h3><button id="closeOrderModal" type="button" class="icon-btn" aria-label="Cerrar">×</button></div>
+      <div class="modal-head"><h3>Orden de Requerimiento</h3><button id="closeOrderModal" type="button" class="icon-btn" aria-label="Cerrar">×</button></div>
+      <div class="order-controls">
+        <div class="field"><label for="orderSolicitante">Solicitante</label><input id="orderSolicitante" maxlength="120" placeholder="Nombre de quien solicita"></div>
+        <div class="field"><label for="orderSolicitadoA">Solicitado a</label><input id="orderSolicitadoA" maxlength="120" placeholder="Persona, área o proveedor al que se solicita"></div>
+        <div class="field"><label for="orderArea">Área / Departamento</label><input id="orderArea" maxlength="120" placeholder="Área o dependencia"></div>
+        <div class="field"><label for="orderPriority">Nivel de prioridad</label><select id="orderPriority"><option>Normal</option><option>Alta</option><option>Urgente</option></select></div>
+        <div class="field"><label for="orderStatus">Estado</label><select id="orderStatus"><option>Pendiente</option><option>En revisión</option><option>Aprobada</option><option>Rechazada</option><option>Atendida</option></select></div>
+      </div>
       <div id="orderDocument" class="order-document"></div>
       <div class="modal-actions"><button id="downloadOrderPdfBtn" class="btn primary">Descargar PDF</button><button id="downloadOrderWordBtn" class="btn secondary">Descargar Word</button></div>
     </div>

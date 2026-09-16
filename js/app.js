@@ -24,6 +24,8 @@ let scannerRunning = false;
 let assetEditingId = "";
 let consumableEditingId = "";
 let orderCounter = 1;
+let currentOrderFolio = "";
+let pendingMovement = null;
 
 const LIMITS = { codigo:80, nombre:140, categoria:80, marca:80, modelo:100, serial:100, espacio:120, responsable:120, unidad:40 };
 
@@ -147,62 +149,95 @@ async function eliminarItemFirebase(idFirebase) {
 }
 window.eliminarItemFirebase=eliminarItemFirebase;
 
-async function ajustarStock(idFirebase, delta) {
+function openMovementModal(idFirebase, delta) {
   const id=String(idFirebase || "").trim();
   const item=inventario.find(entry=>entry.idFirebase===id);
   if(!item || item.tipo!=="Consumible") return;
 
-  const destination=window.prompt(
-    delta>0 ? "Espacio/lugar de destino para la entrada:" : "Espacio/lugar de destino para la salida:",
-    item.espacio || ""
-  );
-  if(destination===null){ showToast("Movimiento cancelado."); return; }
+  pendingMovement={id,delta};
+  const isEntry=delta>0;
+  $("movementTitle").textContent=isEntry ? "Registrar entrada" : "Registrar salida";
+  $("saveMovementBtn").textContent=isEntry ? "Registrar entrada" : "Registrar salida";
+  $("movementItemName").textContent=item.nombre || "Artículo";
+  $("movementItemCode").textContent=`Código: ${item.codigo || "—"}`;
+  $("movementCurrentStock").textContent=`Stock actual: ${item.stockActual}`;
+  $("movementQuantity").value="1";
+  $("movementQuantity").max=isEntry ? "" : String(item.stockActual);
+  $("movementDestination").value=item.espacio || "";
+  $("movementModal").hidden=false;
+  $("movementModal").setAttribute("aria-hidden","false");
+  setTimeout(()=>$("movementQuantity").focus(),50);
+}
 
-  const cleanDestination=sanitizeText(destination,LIMITS.espacio);
-  if(!cleanDestination && delta>0){ showToast("Indique el espacio o lugar de destino.",true); return; }
+function closeMovementModal(){
+  pendingMovement=null;
+  $("movementModal").hidden=true;
+  $("movementModal").setAttribute("aria-hidden","true");
+}
 
-  const itemRef=ref(db,`inventario/${id}`);
+async function registrarMovimientoStock(idFirebase, delta, cantidad, destination) {
+  const item=inventario.find(entry=>entry.idFirebase===idFirebase);
+  if(!item || item.tipo!=="Consumible") throw new Error("El consumible ya no está disponible.");
+
+  const itemRef=ref(db,`inventario/${idFirebase}`);
   let committedSnapshot=null;
+  const result=await runTransaction(itemRef,current=>{
+    if(current===null) return;
+    const currentStock=safeInt(current.stockActual);
+    if(currentStock===null) return;
+    const next=currentStock + (delta * cantidad);
+    if(!Number.isSafeInteger(next) || next<0) return;
+    return {
+      ...current,
+      stockActual:next,
+      espacio:destination,
+      updatedAt:Date.now()
+    };
+  });
 
-  try {
-    const result=await runTransaction(itemRef,current=>{
-      if(current===null) return;
-      const currentStock=safeInt(current.stockActual);
-      if(currentStock===null) return;
-      const next=currentStock+delta;
-      if(!Number.isSafeInteger(next) || next<0) return;
-      return {
-        ...current,
-        stockActual:next,
-        espacio:cleanDestination,
-        updatedAt:Date.now()
-      };
-    });
-
-    if(!result.committed){
-      const latest=safeInt(result.snapshot?.val()?.stockActual);
-      if(delta<0 && latest===0) showToast("El stock ya está en 0; no se puede realizar otra salida.",true);
-      else showToast("No se pudo actualizar el stock. Intente nuevamente.",true);
-      return;
+  if(!result.committed){
+    const latest=safeInt(result.snapshot?.val()?.stockActual);
+    if(delta<0 && latest!==null && latest<cantidad){
+      throw new Error(`No hay suficiente stock para retirar ${cantidad}. Stock disponible: ${latest}.`);
     }
-
-    committedSnapshot=result.snapshot.val();
-  } catch(error) {
-    console.error("Error al actualizar stock:",error);
-    showToast("Firebase no permitió actualizar el stock. Revise las reglas de la base de datos.",true);
-    return;
+    throw new Error("No se pudo actualizar el stock. Intente nuevamente.");
   }
 
+  committedSnapshot=result.snapshot.val();
   const finalStock=safeInt(committedSnapshot?.stockActual);
-  if(finalStock===null){ showToast("Firebase devolvió un stock no válido.",true); return; }
+  if(finalStock===null) throw new Error("Firebase devolvió un stock no válido.");
 
   await registrarMovimiento(
-    { ...item, stockActual:finalStock, espacio:cleanDestination },
-    delta>0 ? "Entrada (+1)" : "Salida (-1)",
-    1,
-    cleanDestination
+    { ...item, stockActual:finalStock, espacio:destination },
+    delta>0 ? "Entrada" : "Salida",
+    cantidad,
+    destination
   );
-  showToast(delta>0 ? "Entrada registrada." : "Salida registrada.");
+  return finalStock;
+}
+
+async function submitMovement(event){
+  event.preventDefault();
+  if(!pendingMovement) return;
+
+  const quantity=safeInt($("movementQuantity").value);
+  const destination=sanitizeText($("movementDestination").value,LIMITS.espacio);
+  const {id,delta}=pendingMovement;
+  const item=inventario.find(entry=>entry.idFirebase===id);
+
+  if(quantity===null || quantity<1){showToast("La cantidad debe ser un número entero mayor que 0.",true);return;}
+  if(!destination){showToast("Indique el espacio o lugar de destino.",true);return;}
+  if(!item){showToast("El consumible ya no está disponible. Recargue la página.",true);closeMovementModal();return;}
+  if(delta<0 && quantity>item.stockActual){showToast(`No hay suficiente stock. Disponible: ${item.stockActual}.`,true);return;}
+
+  try{
+    await registrarMovimientoStock(id,delta,quantity,destination);
+    closeMovementModal();
+    showToast(delta>0 ? `Entrada de ${quantity} unidad${quantity===1?"":"es"} registrada.` : `Salida de ${quantity} unidad${quantity===1?"":"es"} registrada.`);
+  }catch(error){
+    console.error("Error al registrar movimiento:",error);
+    showToast(error.message || "Firebase no permitió actualizar el stock. Revise las reglas de la base de datos.",true);
+  }
 }
 
 function addCell(tr,text,cls="") { tr.appendChild(makeEl("td",text,cls)); }
@@ -220,47 +255,74 @@ function renderizarInventario(items) {
   inventario=items.map(normalizeItem);
   setSync("Sincronizado en tiempo real","ok");
   renderSummary();
-  renderInventoryTable(); renderFilters(); renderCriticals();
+  renderInventoryTable(); renderGeneralInventoryTable(); renderFilters(); renderCriticals();
 }
 window.renderizarInventario=renderizarInventario;
 
 function filteredInventory() {
-  const q=sanitizeText($("globalSearch").value,120).toLowerCase();
-  const type=$("filterType").value,status=$("filterStatus").value,cat=$("filterCategory").value,space=$("filterSpace").value;
+  const q=sanitizeText($("generalSearch").value,120).toLowerCase();
+  const type=$("filterType").value;
+  const status=$("filterStatus").value;
+  const cat=$("filterCategory").value;
+  const space=$("filterSpace").value;
   return inventario.filter(i=>{
     const hay=!q || [i.codigo,i.nombre,i.serial,i.marca,i.modelo,i.categoria,i.responsable,i.espacio].join(" ").toLowerCase().includes(q);
     return hay && (!type||i.tipo===type) && (!status||i.estado===status) && (!cat||i.categoria===cat) && (!space||i.espacio===space);
   });
 }
+
+function renderTableRow(item) {
+  const tr=document.createElement("tr");
+  addCell(tr,item.tipo); addCell(tr,item.codigo); addCell(tr,item.nombre); addCell(tr,item.categoria); addCell(tr,item.estado);
+  addCell(tr,item.espacio); addCell(tr,item.responsable);
+  const stockTd=document.createElement("td");
+  if(item.tipo==="Consumible") {
+    const wrap=document.createElement("div"); wrap.className="stock-control";
+    wrap.append(button("−","minus",()=>openMovementModal(item.idFirebase,-1),"Registrar salida"));
+    wrap.append(makeEl("strong",String(item.stockActual)));
+    wrap.append(button("+","plus",()=>openMovementModal(item.idFirebase,1),"Registrar entrada"));
+    stockTd.appendChild(wrap);
+  } else stockTd.textContent="—";
+  tr.appendChild(stockTd);
+  const act=document.createElement("td"); act.className="actions";
+  act.append(button("Editar","edit",()=>editItem(item)));
+  act.append(button("Copiar","copy",()=>duplicateItem(item),"Duplicar registro"));
+  act.append(button("Eliminar","delete",async()=>{
+    if(confirm(`¿Eliminar "${item.nombre}"?`)){
+      try{await eliminarItemFirebase(item.idFirebase)}catch(e){showToast("No se pudo eliminar.",true)}
+    }
+  }));
+  tr.appendChild(act);
+  return tr;
+}
+
 function renderInventoryTable() {
   const body=$("inventoryTableBody"); body.replaceChildren();
-  const data=filteredInventory();
-  for(const item of data) {
-    const tr=document.createElement("tr");
-    addCell(tr,item.tipo); addCell(tr,item.codigo); addCell(tr,item.nombre); addCell(tr,item.categoria); addCell(tr,item.estado);
-    addCell(tr,item.espacio); addCell(tr,item.responsable);
-    const stockTd=document.createElement("td");
-    if(item.tipo==="Consumible") {
-      const wrap=document.createElement("div"); wrap.className="stock-control";
-      wrap.append(button("−","minus",()=>ajustarStock(item.idFirebase,-1),"Salida -1"));
-      wrap.append(makeEl("strong",String(item.stockActual)));
-      wrap.append(button("+","plus",()=>ajustarStock(item.idFirebase,1),"Entrada +1"));
-      stockTd.appendChild(wrap);
-    } else stockTd.textContent="—";
-    tr.appendChild(stockTd);
-    const act=document.createElement("td"); act.className="actions";
-    act.append(button("Editar","edit",()=>editItem(item)));
-     act.append(button("Copiar","copy",()=>duplicateItem(item),"Duplicar registro"));
-    act.append(button("Eliminar","delete",async()=>{if(confirm(`¿Eliminar "${item.nombre}"?`)){try{await eliminarItemFirebase(item.idFirebase)}catch(e){showToast("No se pudo eliminar.",true)}}}));
-    tr.appendChild(act); body.appendChild(tr);
-  }
+  const data=inventario.filter(i=>i.tipo==="Activo").sort(sortInventory);
+  for(const item of data) body.appendChild(renderTableRow(item));
   $("inventoryCount").textContent=`${data.length} registros`;
 }
+
+function renderGeneralInventoryTable() {
+  const body=$("generalInventoryTableBody"); body.replaceChildren();
+  const data=filteredInventory().sort(sortInventory);
+  for(const item of data) body.appendChild(renderTableRow(item));
+  $("generalInventoryCount").textContent=`${data.length} registros`;
+}
+
+function sortInventory(a,b){
+  const typeOrder={Activo:0,Consumible:1};
+  return (typeOrder[a.tipo]-typeOrder[b.tipo])
+    || a.categoria.localeCompare(b.categoria,"es",{sensitivity:"base"})
+    || a.nombre.localeCompare(b.nombre,"es",{sensitivity:"base"})
+    || a.codigo.localeCompare(b.codigo,"es",{sensitivity:"base"});
+}
+
 function renderFilters() {
   const select=$("filterCategory"), spaceSelect=$("filterSpace");
   const current=select.value, currentSpace=spaceSelect.value;
-  const cats=[...new Set(inventario.map(i=>i.categoria).filter(Boolean))].sort();
-  const spaces=[...new Set(inventario.map(i=>i.espacio).filter(Boolean))].sort();
+  const cats=[...new Set(inventario.map(i=>i.categoria).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"es",{sensitivity:"base"}));
+  const spaces=[...new Set(inventario.map(i=>i.espacio).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"es",{sensitivity:"base"}));
   select.replaceChildren(new Option("Todas las categorías",""));
   spaceSelect.replaceChildren(new Option("Todos los espacios físicos",""));
   cats.forEach(c=>select.appendChild(new Option(c,c)));
@@ -268,6 +330,7 @@ function renderFilters() {
   select.value=cats.includes(current)?current:"";
   spaceSelect.value=spaces.includes(currentSpace)?currentSpace:"";
 }
+
 function renderCriticals() {
   const critical=inventario.filter(i=>i.tipo==="Consumible" && i.stockActual<=i.stockMinimo);
   $("criticalBadge").textContent=String(critical.length);
@@ -497,43 +560,159 @@ async function stopScanner() {
   }
 }
 
-function buildOrderDocument() {
-  const critical=inventario.filter(i=>i.tipo==="Consumible"&&i.stockActual<=i.stockMinimo);
-  const root=$("orderDocument");root.replaceChildren();
-  const folio=`REQ-${new Date().getFullYear()}-${String(orderCounter++).padStart(4,"0")}`;
-  const header=document.createElement("div");header.className="order-header";
-  const left=document.createElement("div");left.className="order-title";left.append(makeEl("h2","SISTEMA DE GESTIÓN DE INVENTARIO"),makeEl("p","Orden de Requerimiento de Consumibles"));
-  const right=document.createElement("div");right.className="order-meta";right.append(makeEl("p",`Folio: ${folio}`),makeEl("p",`Fecha: ${new Date().toLocaleDateString("es-CO")}`));header.append(left,right);root.appendChild(header);
-  const data=document.createElement("div");data.className="order-data";
-  [["Solicitante","Área TIC"],["Área/Departamento","Gestión de Inventario"],["Nivel de Prioridad",critical.length?"Alta / Crítico":"Normal"],["Estado","Pendiente de aprobación"]].forEach(([a,b])=>{const x=document.createElement("div");x.className="order-box";x.append(makeEl("strong",a),document.createElement("br"),makeEl("span",b));data.appendChild(x)});root.appendChild(data);
-  const table=document.createElement("table");table.className="order-table";const thead=document.createElement("thead"),hr=document.createElement("tr");["N°","Descripción / Material","Stock Actual","Stock Mínimo","Cantidad a Solicitar"].forEach(h=>hr.appendChild(makeEl("th",h)));thead.appendChild(hr);table.appendChild(thead);const tbody=document.createElement("tbody");
-  critical.forEach((i,n)=>{const tr=document.createElement("tr");[String(n+1),i.nombre,String(i.stockActual),String(i.stockMinimo),String(Math.max(1,i.stockMinimo-i.stockActual+1))].forEach((v,k)=>addCell(tr,v,k===2?"danger-cell":""));tbody.appendChild(tr)});table.appendChild(tbody);root.appendChild(table);
-  const just=document.createElement("div");just.className="justification";just.append(makeEl("strong","Justificación"),makeEl("p",critical.length?"Reposición de consumibles que se encuentran en nivel crítico o por debajo del mínimo establecido.":"No existen consumibles críticos."));root.appendChild(just);
-  const signs=document.createElement("div");signs.className="signatures";["Solicitado Por","Aprobado Por"].forEach(s=>signs.appendChild(makeEl("div",s,"signature")));root.appendChild(signs);
+function getOrderMeta(){
+  return {
+    solicitante:sanitizeText($("orderSolicitante").value,120),
+    solicitadoA:sanitizeText($("orderSolicitadoA").value,120),
+    area:sanitizeText($("orderArea").value,120),
+    prioridad:sanitizeText($("orderPriority").value,40),
+    estado:sanitizeText($("orderStatus").value,40)
+  };
 }
-function openOrder(){buildOrderDocument();$("orderModal").hidden=false;$("orderModal").setAttribute("aria-hidden","false")}
-function closeOrder(){$("orderModal").hidden=true;$("orderModal").setAttribute("aria-hidden","true")}
-function exportExcel(){const rows=filteredInventory().map(i=>({Tipo:i.tipo,Código:i.codigo,Nombre:i.nombre,Categoría:i.categoria,Marca:i.marca,Modelo:i.modelo,Serial:i.serial,Estado:i.estado,"Espacio Físico / Ubicación":i.espacio,Responsable:i.responsable,Unidad:i.unidad,Stock:i.stockActual,Stock_Mínimo:i.stockMinimo,Fecha_Ingreso:i.fechaIngreso,Fecha_Egreso:i.fechaEgreso}));const ws=XLSX.utils.json_to_sheet(rows);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"Inventario");XLSX.writeFile(wb,"inventario.xlsx")}
-function exportPdf(){const wrap=document.createElement("div");const title=makeEl("h2","Inventario");wrap.appendChild(title);const table=document.querySelector(".table-card table").cloneNode(true);wrap.appendChild(table);html2pdf().set({margin:8,filename:"inventario.pdf",html2canvas:{scale:2},jsPDF:{orientation:"landscape",unit:"mm",format:"a4"}}).from(wrap).save()}
+
+function buildOrderDocument() {
+  const critical=inventario.filter(i=>i.tipo==="Consumible"&&i.stockActual<=i.stockMinimo)
+    .sort(sortInventory);
+  const meta=getOrderMeta();
+  const root=$("orderDocument"); root.replaceChildren();
+  if(!currentOrderFolio) currentOrderFolio=`REQ-${new Date().getFullYear()}-${String(orderCounter++).padStart(4,"0")}`;
+
+  const header=document.createElement("div"); header.className="order-header";
+  const left=document.createElement("div"); left.className="order-title";
+  left.append(makeEl("h2","SISTEMA DE GESTIÓN DE INVENTARIO"),makeEl("p","Orden de Requerimiento de Consumibles"));
+  const right=document.createElement("div"); right.className="order-meta";
+  right.append(makeEl("p",`Folio: ${currentOrderFolio}`),makeEl("p",`Fecha: ${new Date().toLocaleDateString("es-CO")}`));
+  header.append(left,right); root.appendChild(header);
+
+  const data=document.createElement("div"); data.className="order-data";
+  [["Solicitante",meta.solicitante||"—"],["Solicitado a",meta.solicitadoA||"—"],["Área / Departamento",meta.area||"—"],["Nivel de Prioridad",meta.prioridad||"—"],["Estado",meta.estado||"—"]]
+    .forEach(([a,b])=>{const x=document.createElement("div");x.className="order-box";x.append(makeEl("strong",a),document.createElement("br"),makeEl("span",b));data.appendChild(x)});
+  root.appendChild(data);
+
+  const table=document.createElement("table"); table.className="order-table";
+  const thead=document.createElement("thead"), hr=document.createElement("tr");
+  ["N°","Descripción / Material","Stock Actual","Stock Mínimo","Cantidad a Solicitar"].forEach(h=>hr.appendChild(makeEl("th",h)));
+  thead.appendChild(hr); table.appendChild(thead);
+  const tbody=document.createElement("tbody");
+  critical.forEach((i,n)=>{
+    const tr=document.createElement("tr");
+    [String(n+1),i.nombre,String(i.stockActual),String(i.stockMinimo),String(Math.max(1,i.stockMinimo-i.stockActual+1))]
+      .forEach((v,k)=>addCell(tr,v,k===2?"danger-cell":""));
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody); root.appendChild(table);
+
+  const just=document.createElement("div"); just.className="justification";
+  just.append(makeEl("strong","Justificación"),makeEl("p",critical.length?"Reposición de consumibles que se encuentran en nivel crítico o por debajo del mínimo establecido.":"No existen consumibles críticos."));
+  root.appendChild(just);
+  const signs=document.createElement("div"); signs.className="signatures";
+  [meta.solicitante?`Solicitado Por: ${meta.solicitante}`:"Solicitado Por",meta.solicitadoA?`Solicitado A: ${meta.solicitadoA}`:"Aprobado Por"]
+    .forEach(s=>signs.appendChild(makeEl("div",s,"signature")));
+  root.appendChild(signs);
+}
+
+function openOrder(){
+  currentOrderFolio="";
+  $("orderSolicitante").value="";
+  $("orderSolicitadoA").value="";
+  $("orderArea").value="";
+  $("orderPriority").value=inventario.some(i=>i.tipo==="Consumible"&&i.stockActual<=i.stockMinimo)?"Alta":"Normal";
+  $("orderStatus").value="Pendiente";
+  buildOrderDocument();
+  $("orderModal").hidden=false;
+  $("orderModal").setAttribute("aria-hidden","false");
+}
+function closeOrder(){$("orderModal").hidden=true;$("orderModal").setAttribute("aria-hidden","true");}
+
+function exportRows(){
+  return filteredInventory().sort(sortInventory).map(i=>({
+    Tipo:i.tipo,
+    Código:i.codigo,
+    Nombre:i.nombre,
+    Categoría:i.categoria,
+    Marca:i.marca,
+    Modelo:i.modelo,
+    Serial:i.serial,
+    Estado:i.estado,
+    "Espacio Físico / Ubicación":i.espacio,
+    Responsable:i.responsable,
+    Unidad:i.unidad,
+    Stock:i.tipo==="Consumible"?i.stockActual:"",
+    "Stock Mínimo":i.tipo==="Consumible"?i.stockMinimo:"",
+    "Fecha de Ingreso":i.fechaIngreso,
+    "Fecha de Egreso":i.fechaEgreso
+  }));
+}
+
+function exportExcel(){
+  const rows=exportRows();
+  const ws=XLSX.utils.json_to_sheet(rows);
+  ws["!cols"]=[18,18,32,20,18,20,22,20,30,25,15,12,14,16,16].map(w=>({wch:w}));
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,"Inventario General");
+  XLSX.writeFile(wb,"inventario_general.xlsx");
+}
+
+function exportPdf(){
+  const rows=exportRows();
+  const wrap=document.createElement("div");
+  wrap.style.background="#ffffff"; wrap.style.padding="18px"; wrap.style.color="#111111"; wrap.style.fontFamily="Arial,Helvetica,sans-serif";
+  const title=makeEl("h2","Inventario General"); title.style.margin="0 0 4px"; wrap.appendChild(title);
+  const subtitle=makeEl("p",`Exportado: ${new Date().toLocaleString("es-CO")} · ${rows.length} registros`); subtitle.style.margin="0 0 14px"; subtitle.style.color="#555555"; wrap.appendChild(subtitle);
+
+  const table=document.createElement("table"); table.style.width="100%"; table.style.borderCollapse="collapse"; table.style.fontSize="9px";
+  const headers=["Tipo","Código","Nombre","Categoría","Marca","Modelo","Serial","Estado","Espacio / Ubicación","Responsable","Unidad","Stock","Stock Mínimo","Fecha de Ingreso","Fecha de Egreso"];
+  const thead=document.createElement("thead"),hr=document.createElement("tr");
+  headers.forEach(h=>{const th=makeEl("th",h);th.style.border="1px solid #bfc7d4";th.style.padding="5px";th.style.background="#eef2f7";th.style.textAlign="left";hr.appendChild(th)}); thead.appendChild(hr); table.appendChild(thead);
+  const tbody=document.createElement("tbody");
+  rows.forEach(row=>{const tr=document.createElement("tr");headers.forEach(h=>{const td=makeEl("td",String(row[h]??""));td.style.border="1px solid #d6dbe3";td.style.padding="5px";td.style.verticalAlign="top";tr.appendChild(td)});tbody.appendChild(tr)});
+  table.appendChild(tbody); wrap.appendChild(table);
+
+  html2pdf().set({margin:6,filename:"inventario_general.pdf",html2canvas:{scale:2},jsPDF:{orientation:"landscape",unit:"mm",format:"a3"},pagebreak:{mode:["avoid-all","css","legacy"]}}).from(wrap).save();
+}
+
 async function exportOrderWord(){
   if(!window.docx){showToast("La librería DOCX no está disponible.",true);return}
   const {Document,Packer,Paragraph,Table,TableRow,TableCell,TextRun,WidthType}=window.docx;
-  const critical=inventario.filter(i=>i.tipo==="Consumible"&&i.stockActual<=i.stockMinimo);
+  const critical=inventario.filter(i=>i.tipo==="Consumible"&&i.stockActual<=i.stockMinimo).sort(sortInventory);
+  const meta=getOrderMeta();
   const rows=[new TableRow({children:["N°","Descripción / Material","Stock Actual","Stock Mínimo","Cantidad a Solicitar"].map(x=>new TableCell({children:[new Paragraph(x)]}))})];
   critical.forEach((i,n)=>rows.push(new TableRow({children:[n+1,i.nombre,i.stockActual,i.stockMinimo,Math.max(1,i.stockMinimo-i.stockActual+1)].map(x=>new TableCell({children:[new Paragraph(String(x))]}))})));
-  const doc=new Document({sections:[{children:[new Paragraph({children:[new TextRun({text:"SISTEMA DE GESTIÓN DE INVENTARIO",bold:true,size:28})]}),new Paragraph("Orden de Requerimiento de Consumibles"),new Paragraph(`Fecha: ${new Date().toLocaleDateString("es-CO")}`),new Table({rows,width:{size:100,type:WidthType.PERCENTAGE}}),new Paragraph("Justificación: Reposición de consumibles en nivel crítico."),new Paragraph("\n\n__________________________                         __________________________\nSolicitado Por                                                     Aprobado Por")]}]});
+  const doc=new Document({sections:[{children:[
+    new Paragraph({children:[new TextRun({text:"SISTEMA DE GESTIÓN DE INVENTARIO",bold:true,size:28})]}),
+    new Paragraph("Orden de Requerimiento de Consumibles"),
+    new Paragraph(`Folio: ${currentOrderFolio || "—"}`),
+    new Paragraph(`Fecha: ${new Date().toLocaleDateString("es-CO")}`),
+    new Paragraph(`Solicitante: ${meta.solicitante || "—"}`),
+    new Paragraph(`Solicitado a: ${meta.solicitadoA || "—"}`),
+    new Paragraph(`Área / Departamento: ${meta.area || "—"}`),
+    new Paragraph(`Nivel de Prioridad: ${meta.prioridad || "—"}`),
+    new Paragraph(`Estado: ${meta.estado || "—"}`),
+    new Table({rows,width:{size:100,type:WidthType.PERCENTAGE}}),
+    new Paragraph("Justificación: Reposición de consumibles en nivel crítico."),
+    new Paragraph(`\n\n__________________________                         __________________________\n${meta.solicitante?`Solicitado Por: ${meta.solicitante}`:"Solicitado Por"}                         ${meta.solicitadoA?`Solicitado A: ${meta.solicitadoA}`:"Aprobado Por"}`)
+  ]}]});
   saveAs(await Packer.toBlob(doc),"orden_requerimiento.docx");
 }
+
 function exportJson(){const data={inventario,movimientos,exportadoEn:Date.now()};const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});saveAs(blob,"backup_inventario.json")}
 async function importJson(file){if(!file)return;try{const data=JSON.parse(await file.text());if(!Array.isArray(data.inventario))throw new Error();if(!confirm("Esto agregará los registros del respaldo a Firebase. ¿Continuar?"))return;for(const raw of data.inventario){const item=normalizeItem(raw);delete item.idFirebase;await set(push(inventarioRef),item)}if(Array.isArray(data.movimientos)){for(const m of data.movimientos)await set(push(movimientosRef),{fechaHora:Number(m.fechaHora)||Date.now(),codigo:sanitizeText(m.codigo,LIMITS.codigo),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)})}showToast("Copia importada correctamente.");}catch{showToast("Archivo JSON inválido.",true)}}
 function activateTab(id){document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===id));document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x.dataset.tab===id))}
 
+$("globalSearch").addEventListener("input",()=>{
+  $("generalSearch").value=$("globalSearch").value;
+  if($("globalSearch").value.trim()) activateTab("general");
+  renderGeneralInventoryTable();
+});
+
 document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>activateTab(b.dataset.tab)));
-["globalSearch","filterType","filterStatus","filterCategory","filterSpace"].forEach(id=>$(id).addEventListener("input",renderInventoryTable));
-$("clearFiltersBtn").addEventListener("click",()=>{$("globalSearch").value="";$("filterType").value="";$("filterStatus").value="";$("filterCategory").value="";$("filterSpace").value="";renderInventoryTable()});
+["generalSearch","filterType","filterStatus","filterCategory","filterSpace"].forEach(id=>$(id).addEventListener("input",renderGeneralInventoryTable));
+$("clearFiltersBtn").addEventListener("click",()=>{$("generalSearch").value="";$("filterType").value="";$("filterStatus").value="";$("filterCategory").value="";$("filterSpace").value="";renderGeneralInventoryTable()});
 $("estado").addEventListener("change",toggleLocationFields);$("generateSkuBtn").addEventListener("click",generateSku);$("generateConsumableSkuBtn").addEventListener("click",generateConsumableSku);$("scanBtn").addEventListener("click",startScanner);$("closeScannerBtn").addEventListener("click",stopScanner);
 $("scannerModal").addEventListener("click",e=>{if(e.target===$("scannerModal"))stopScanner()});$("orderModal").addEventListener("click",e=>{if(e.target===$("orderModal"))closeOrder()});$("closeOrderModal").addEventListener("click",closeOrder);
-document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("scannerModal").hidden)stopScanner();if(!$("orderModal").hidden)closeOrder()}});
+$("movementModal").addEventListener("click",e=>{if(e.target===$("movementModal"))closeMovementModal()});$("closeMovementModal").addEventListener("click",closeMovementModal);$("cancelMovementBtn").addEventListener("click",closeMovementModal);$("movementForm").addEventListener("submit",submitMovement);
+["orderSolicitante","orderSolicitadoA","orderArea"].forEach(id=>$(id).addEventListener("input",buildOrderDocument));["orderPriority","orderStatus"].forEach(id=>$(id).addEventListener("change",buildOrderDocument));
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("scannerModal").hidden)stopScanner();if(!$("orderModal").hidden)closeOrder();if(!$("movementModal").hidden)closeMovementModal()}});
 $("assetForm").addEventListener("submit",async e=>{
   e.preventDefault();
   try {
