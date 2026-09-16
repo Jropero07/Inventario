@@ -12,6 +12,7 @@
   <script src="https://unpkg.com/docx@8.2.2/build/index.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
   <link rel="stylesheet" href="css/styles.css">
 </head>
@@ -27,11 +28,11 @@
       </div>
 
       <nav class="tabs" aria-label="Módulos del sistema">
-        <button class="tab active" type="button" data-tab="activos"><span>Activos</span></button>
-        <button class="tab" type="button" data-tab="consumibles"><span>Consumibles</span></button>
-        <button class="tab" type="button" data-tab="general"><span>Inventario General</span></button>
-        <button class="tab" type="button" data-tab="alertas"><span>Alertas</span><span id="criticalBadge" class="badge">0</span></button>
-        <button class="tab" type="button" data-tab="movimientos"><span>Historial de Movimientos</span></button>
+        <button class="tab active" type="button" data-tab="activos"><span aria-hidden="true">💻</span><span>Activos</span></button>
+        <button class="tab" type="button" data-tab="consumibles"><span aria-hidden="true">📦</span><span>Consumibles</span></button>
+        <button class="tab" type="button" data-tab="general"><span aria-hidden="true">📋</span><span>Inventario General</span></button>
+        <button class="tab" type="button" data-tab="alertas"><span aria-hidden="true">⚠️</span><span>Alertas</span><span id="criticalBadge" class="badge">0</span></button>
+        <button class="tab" type="button" data-tab="movimientos"><span aria-hidden="true">🕘</span><span>Historial de Movimientos</span></button>
       </nav>
 
       <div class="sync-card">
@@ -40,8 +41,8 @@
       </div>
 
       <div class="sidebar-actions">
-        <button id="exportJsonBtn" class="btn secondary">Exportar copia JSON</button>
-        <label class="btn secondary file-btn">Importar copia JSON<input id="importJsonInput" type="file" accept="application/json"></label>
+        <button id="exportJsonBtn" class="btn secondary">💾 Exportar copia JSON</button>
+        <label class="btn secondary file-btn">📥 Importar copia JSON<input id="importJsonInput" type="file" accept="application/json"></label>
       </div>
     </aside>
 
@@ -70,21 +71,21 @@
             <label for="codigo">Código / SKU / Serial</label>
             <div class="inline-controls">
               <input id="codigo" maxlength="80" autocomplete="off" required>
-              <button id="generateSkuBtn" type="button" class="btn secondary">Generar SKU</button>
-              <button id="scanBtn" type="button" class="btn primary">Escanear</button>
+              <button id="generateSkuBtn" type="button" class="btn secondary">🏷️ Generar SKU</button>
+              <button id="scanBtn" type="button" class="btn primary">📷 Escanear</button>
             </div>
           </div>
 
           <div class="field"><label for="nombre">Nombre / Descripción</label><input id="nombre" maxlength="140" required></div>
-          <div class="field"><label for="categoria">Categoría</label><input id="categoria" maxlength="80" placeholder="Ej. Redes, CCTV, Audio"></div>
-          <div class="field"><label for="marca">Marca</label><input id="marca" maxlength="80"></div>
-          <div class="field"><label for="modelo">Modelo</label><input id="modelo" maxlength="100"></div>
+          <div class="field"><label for="categoria">Categoría</label><input id="categoria" maxlength="80" placeholder="Ej. Redes, CCTV, Audio" required></div>
+          <div class="field"><label for="marca">Marca</label><input id="marca" maxlength="80" required></div>
+          <div class="field"><label for="modelo">Modelo</label><input id="modelo" maxlength="100" required></div>
           <div class="field"><label for="serial">Número de serie</label><input id="serial" maxlength="100"></div>
-          <div class="field"><label for="fechaIngreso">Fecha de ingreso</label><input id="fechaIngreso" type="date"></div>
+          <div class="field"><label for="fechaIngreso">Fecha de ingreso</label><input id="fechaIngreso" type="date" required></div>
           <div id="assignmentDateField" class="field hidden"><label for="fechaAsignacion">Fecha de asignación</label><input id="fechaAsignacion" type="date"></div>
 
           <div class="field"><label for="estado">Estado</label>
-            <select id="estado">
+            <select id="estado" required>
               <option value="Disponible">Disponible</option>
               <option value="Asignado">Asignado</option>
               <option value="En mantenimiento">En mantenimiento</option>
@@ -92,12 +93,12 @@
             </select>
           </div>
 
-          <div class="field"><label for="espacio">Espacio Físico / Ubicación</label><input id="espacio" maxlength="120" placeholder="Ej. Estante B-2, Coordinación, Cámara 3 - Cargador 3A"></div>
+          <div class="field"><label for="espacio">Espacio Físico / Ubicación</label><input id="espacio" maxlength="120" placeholder="Ej. Estante B-2, Coordinación, Cámara 3 - Cargador 3A" required></div>
           <div id="responsableField" class="field hidden"><label for="responsable">Persona Responsable / Custodio</label><input id="responsable" maxlength="120"></div>
 
           <div class="form-actions full">
-            <button id="saveItemBtn" class="btn primary" type="submit">Guardar activo</button>
-            <button id="cancelEditBtn" class="btn secondary" type="button">Limpiar</button>
+            <button id="saveItemBtn" class="btn primary" type="submit">💾 Guardar activo</button>
+            <button id="cancelEditBtn" class="btn secondary" type="button">🧹 Limpiar</button>
           </div>
         </form>
 
@@ -116,18 +117,18 @@
         <div class="panel-head">
           <div><h2>Inventario General</h2><p>Consulte y filtre todos los activos y consumibles registrados.</p></div>
           <div class="toolbar">
-            <button id="exportExcelBtn" class="btn secondary">Excel</button>
-            <button id="exportPdfBtn" class="btn secondary">PDF</button>
+            <button id="exportExcelBtn" class="btn secondary">📊 Excel</button>
+            <button id="exportPdfBtn" class="btn secondary">📄 PDF</button>
           </div>
         </div>
 
         <div class="filters general-filters">
-          <input id="generalSearch" type="search" placeholder="Buscar por código, nombre, serial, marca...">
+          <div class="search-with-scan"><input id="generalSearch" type="search" placeholder="Buscar por código, nombre, serial, marca..."><button id="generalScanBtn" type="button" class="btn primary">📷 Escanear</button></div>
           <select id="filterType"><option value="">Todos los tipos</option><option value="Activo">Activo</option><option value="Consumible">Consumible</option></select>
           <select id="filterStatus"><option value="">Todos los estados</option><option>Disponible</option><option>Asignado</option><option>En mantenimiento</option><option>Baja</option></select>
           <select id="filterCategory"><option value="">Todas las categorías</option></select>
           <select id="filterSpace"><option value="">Todos los espacios físicos</option></select>
-          <button id="clearFiltersBtn" class="btn secondary">Limpiar filtros</button>
+          <button id="clearFiltersBtn" class="btn secondary">🧹 Limpiar filtros</button>
         </div>
 
         <div class="table-card">
@@ -145,22 +146,22 @@
         <div class="panel-head"><div><h2>Gestión de Consumibles</h2><p>Controle existencias y niveles mínimos de alerta.</p></div></div>
         <form id="consumableForm" class="card form-grid" novalidate>
           <input id="cEditingId" type="hidden">
-          <div class="field code-field"><label for="cCodigo">Código / SKU</label><div class="inline-controls"><input id="cCodigo" maxlength="80" autocomplete="off" required><button id="generateConsumableSkuBtn" type="button" class="btn secondary">Generar SKU</button></div></div>
+          <div class="field code-field"><label for="cCodigo">Código / SKU</label><div class="inline-controls"><input id="cCodigo" maxlength="80" autocomplete="off" required><button id="generateConsumableSkuBtn" type="button" class="btn secondary">🏷️ Generar SKU</button></div></div>
           <div class="field"><label for="cNombre">Nombre</label><input id="cNombre" maxlength="140" required></div>
-          <div class="field"><label for="cCategoria">Categoría</label><input id="cCategoria" maxlength="80"></div>
-          <div class="field"><label for="cUnidad">Unidad de medida</label><input id="cUnidad" maxlength="40" placeholder="Unidad, caja, metro..."></div>
-          <div class="field"><label for="cFecha">Fecha de ingreso</label><input id="cFecha" type="date"></div>
-           <div class="field"><label for="cEspacio">Espacio Físico / Ubicación</label><input id="cEspacio" maxlength="120" placeholder="Ej. Estante B-2, Bodega TIC"></div>
+          <div class="field"><label for="cCategoria">Categoría</label><input id="cCategoria" maxlength="80" required></div>
+          <div class="field"><label for="cUnidad">Unidad de medida</label><input id="cUnidad" maxlength="40" placeholder="Unidad, caja, metro..." required></div>
+          <div class="field"><label for="cFecha">Fecha de ingreso</label><input id="cFecha" type="date" required></div>
+           <div class="field"><label for="cEspacio">Espacio Físico / Ubicación</label><input id="cEspacio" maxlength="120" placeholder="Ej. Estante B-2, Bodega TIC" required></div>
           <div class="field"><label for="cStock">Stock actual</label><input id="cStock" type="number" min="0" step="1" inputmode="numeric" required></div>
           <div class="field"><label for="cMinimo">Stock mínimo</label><input id="cMinimo" type="number" min="0" step="1" inputmode="numeric" required></div>
-          <div class="form-actions full"><button class="btn primary" type="submit">Guardar consumible</button><button id="clearConsumableBtn" class="btn secondary" type="button">Limpiar</button></div>
+          <div class="form-actions full"><button class="btn primary" type="submit">💾 Guardar consumible</button><button id="clearConsumableBtn" class="btn secondary" type="button">🧹 Limpiar</button></div>
         </form>
       </section>
 
       <section id="alertas" class="panel">
         <div class="panel-head">
           <div><h2>Alertas y Requerimientos</h2><p>Consumibles cuyo stock actual es menor o igual al stock mínimo.</p></div>
-          <button id="generateOrderBtn" class="btn primary">Generar Orden de Requerimiento</button>
+          <button id="generateOrderBtn" class="btn primary">📄 Generar Orden de Requerimiento</button>
         </div>
         <div id="criticalList" class="critical-grid"></div>
       </section>
@@ -176,7 +177,7 @@
           <select id="movementType"><option value="">Todos los tipos</option><option value="Activo">Activo</option><option value="Consumible">Consumible</option></select>
           <select id="movementAction"><option value="">Todas las acciones</option><option value="Entrada">Entrada</option><option value="Salida">Salida</option><option value="Registro">Registro</option><option value="Edición">Edición</option><option value="Eliminación">Eliminación</option></select>
           <input id="movementSearchDestination" type="search" placeholder="Buscar destino / lugar...">
-          <button id="clearMovementFiltersBtn" class="btn secondary" type="button">Limpiar filtros</button>
+          <button id="clearMovementFiltersBtn" class="btn secondary" type="button">🧹 Limpiar filtros</button>
         </div>
         <div class="table-card"><div class="table-wrap">
           <table><thead><tr><th>Fecha / Hora</th><th>Tipo</th><th>SKU / Código</th><th>Serial</th><th>Nombre</th><th>Acción</th><th>Cantidad</th><th>Espacio / Destino</th></tr></thead>
@@ -206,8 +207,8 @@
         <div class="field"><label for="movementQuantity">Cantidad</label><input id="movementQuantity" type="number" min="1" step="1" inputmode="numeric" value="1" required></div>
         <div class="field"><label for="movementDestination">Espacio / Lugar de destino</label><input id="movementDestination" maxlength="120" required placeholder="Ej. Bodega TIC, Oficina 203"></div>
         <div class="modal-actions">
-          <button id="cancelMovementBtn" type="button" class="btn secondary">Cancelar</button>
-          <button id="saveMovementBtn" type="submit" class="btn primary">Registrar movimiento</button>
+          <button id="cancelMovementBtn" type="button" class="btn secondary">✖️ Cancelar</button>
+          <button id="saveMovementBtn" type="submit" class="btn primary">↔️ Registrar movimiento</button>
         </div>
       </form>
     </div>
@@ -224,7 +225,19 @@
         <div class="field"><label for="orderStatus">Estado</label><select id="orderStatus"><option>Pendiente</option><option>En revisión</option><option>Aprobada</option><option>Rechazada</option><option>Atendida</option></select></div>
       </div>
       <div id="orderDocument" class="order-document"></div>
-      <div class="modal-actions"><button id="downloadOrderPdfBtn" class="btn primary">Descargar PDF</button><button id="downloadOrderWordBtn" class="btn secondary">Descargar Word</button></div>
+      <div class="modal-actions"><button id="downloadOrderPdfBtn" class="btn primary">📄 Descargar PDF</button><button id="downloadOrderWordBtn" class="btn secondary">📝 Descargar Word</button></div>
+    </div>
+  </div>
+
+  <div id="qrModal" class="modal-backdrop" hidden aria-hidden="true">
+    <div class="modal qr-modal" role="dialog" aria-modal="true" aria-labelledby="qrTitle">
+      <div class="modal-head"><h3 id="qrTitle">Código QR del artículo</h3><button id="closeQrBtn" type="button" class="icon-btn" aria-label="Cerrar">×</button></div>
+      <div class="qr-content">
+        <strong id="qrItemName">Artículo</strong>
+        <span id="qrItemCode">Código: —</span>
+        <div id="qrCanvas" class="qr-canvas" aria-label="Código QR generado"></div>
+      </div>
+      <div class="modal-actions"><button id="cancelQrBtn" type="button" class="btn secondary">✖️ Cerrar</button><button id="downloadQrBtn" type="button" class="btn primary">⬇️ Descargar PNG</button></div>
     </div>
   </div>
 
