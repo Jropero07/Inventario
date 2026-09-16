@@ -202,7 +202,9 @@ function openMovementModal(idFirebase, delta) {
   pendingMovement={id,delta};
   const isEntry=delta>0;
   $("movementTitle").textContent=isEntry ? "Registrar entrada" : "Registrar salida";
-  $("saveMovementBtn").textContent=isEntry ? "Registrar entrada" : "Registrar salida";
+  $("saveMovementBtn").innerHTML=isEntry
+    ? '<i class="fa-solid fa-plus" aria-hidden="true"></i><span>Registrar entrada</span>'
+    : '<i class="fa-solid fa-minus" aria-hidden="true"></i><span>Registrar salida</span>';
   $("movementItemName").textContent=item.nombre || "Artículo";
   $("movementItemCode").textContent=`Código: ${item.codigo || "—"}`;
   $("movementCurrentStock").textContent=`Stock actual: ${item.stockActual}`;
@@ -285,7 +287,26 @@ async function submitMovement(event){
 }
 
 function addCell(tr,text,cls="") { tr.appendChild(makeEl("td",text,cls)); }
-function button(text,cls,handler,title="") { const b=document.createElement("button"); b.type="button"; b.className="mini-btn "+cls; b.textContent=text; b.title=title||text; b.addEventListener("click",handler); return b; }
+function button(icon, text, cls, handler, title="") {
+  const b=document.createElement("button");
+  b.type="button";
+  b.className="mini-btn "+cls;
+  if(icon){
+    const i=document.createElement("i");
+    i.className=`fa-solid ${icon}`;
+    i.setAttribute("aria-hidden","true");
+    b.appendChild(i);
+  }
+  if(text){
+    const span=document.createElement("span");
+    span.textContent=text;
+    b.appendChild(span);
+  }
+  b.title=title||text||"Acción";
+  b.setAttribute("aria-label",title||text||"Acción");
+  b.addEventListener("click",handler);
+  return b;
+}
 
 function renderSummary() {
   const assets=inventario.filter(i=>i.tipo==="Activo");
@@ -328,17 +349,17 @@ function renderTableRow(item) {
   const stockTd=document.createElement("td");
   if(item.tipo==="Consumible") {
     const wrap=document.createElement("div"); wrap.className="stock-control";
-    wrap.append(button("➖","minus",()=>openMovementModal(item.idFirebase,-1),"Registrar salida"));
+    wrap.append(button("fa-minus","","minus",()=>openMovementModal(item.idFirebase,-1),"Registrar salida"));
     wrap.append(makeEl("strong",String(item.stockActual)));
-    wrap.append(button("➕","plus",()=>openMovementModal(item.idFirebase,1),"Registrar entrada"));
+    wrap.append(button("fa-plus","","plus",()=>openMovementModal(item.idFirebase,1),"Registrar entrada"));
     stockTd.appendChild(wrap);
   } else stockTd.textContent="—";
   tr.appendChild(stockTd);
   const act=document.createElement("td"); act.className="actions";
-  act.append(button("✏️ Editar","edit",()=>editItem(item)));
-  act.append(button("📋 Copiar","copy",()=>duplicateItem(item),"Duplicar registro"));
-  act.append(button("🔳 QR","qr",()=>openQrModal(item),"Generar código QR"));
-  act.append(button("🗑️ Eliminar","delete",async()=>{
+  act.append(button("fa-pen-to-square","Editar","edit",()=>editItem(item)));
+  act.append(button("fa-copy","Copiar","copy",()=>duplicateItem(item),"Duplicar registro"));
+  act.append(button("fa-qrcode","QR","qr",()=>openQrModal(item),"Generar código QR"));
+  act.append(button("fa-trash","Eliminar","delete",async()=>{
     if(confirm(`¿Eliminar "${item.nombre}"?`)){
       try{await eliminarItemFirebase(item.idFirebase)}catch(e){showToast("No se pudo eliminar.",true)}
     }

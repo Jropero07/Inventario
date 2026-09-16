@@ -943,3 +943,67 @@ th {
     min-height: 250px;
   }
 }
+
+
+/* -------------------------
+   21. Iconografía consistente
+   ------------------------- */
+.tab {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  justify-content: initial;
+  gap: 10px;
+}
+
+.tab > i {
+  width: 24px;
+  text-align: center;
+  font-size: 16px;
+  line-height: 1;
+  flex: none;
+}
+
+.tab-label {
+  min-width: 0;
+  text-align: left;
+}
+
+.tab .badge {
+  justify-self: end;
+}
+
+.btn > i,
+.file-btn > i,
+.mini-btn > i,
+.icon-btn > i {
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.btn > i,
+.file-btn > i {
+  margin-right: 7px;
+}
+
+.file-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.file-btn input[type="file"] {
+  display: none;
+}
+
+.mini-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+}
