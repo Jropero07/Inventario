@@ -1,10 +1,5 @@
-/* =========================================================
-   SISTEMA DE CONTROL E INVENTARIO
-   app.js - Firebase Realtime Database + interfaz
-   ========================================================= */
-
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js";
-import { getDatabase, ref, push, set, onValue, remove } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-database.js";
+import { getDatabase, ref, push, set, onValue, remove, update, runTransaction } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyB-FX1wyTkycQ-21QRDf5VWy5p9N__ZNl8",
@@ -17,708 +12,379 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-const dbFirebase = getDatabase(app);
-const inventarioRef = ref(dbFirebase, "inventario");
-const configuracionRef = ref(dbFirebase, "configuracion");
+const db = getDatabase(app);
+const inventarioRef = ref(db, "inventario");
+const movimientosRef = ref(db, "movimientos");
 
-(() => {
-  "use strict";
+const $ = id => document.getElementById(id);
+let inventario = [];
+let movimientos = [];
+let scanner = null;
+let scannerRunning = false;
+let orderCounter = 1;
 
-  const todayISO = () => new Date().toISOString().slice(0,10);
+const LIMITS = { codigo:80, nombre:140, categoria:80, marca:80, modelo:100, serial:100, espacio:120, responsable:120, unidad:40 };
 
-  const defaultDB = {
-    assets: [],
-    consumables: [],
-    meta: { nextOrderNumber: 1 }
+function sanitizeText(value, max=160) {
+  return String(value ?? "")
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+    .replace(/[<>`]/g, "")
+    .replace(/javascript\s*:/gi, "")
+    .replace(/data\s*:\s*text\/html/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+function safeInt(value) {
+  const text = String(value ?? "").trim();
+  if (!/^\d+$/.test(text)) return null;
+  const n = Number(text);
+  return Number.isSafeInteger(n) && n >= 0 ? n : null;
+}
+function fmtDateTime(ts) { try { return new Date(ts).toLocaleString("es-CO"); } catch { return ""; } }
+function showToast(message, isError=false) {
+  const t=$("toast"); t.textContent=sanitizeText(message,180); t.style.background=isError?"#b91c1c":"#172033";
+  t.classList.add("show"); clearTimeout(showToast.timer); showToast.timer=setTimeout(()=>t.classList.remove("show"),2800);
+}
+function setSync(text,state="") { $("syncStatus").textContent=text; $("syncDot").className="sync-dot "+state; }
+function makeEl(tag,text="",className="") { const el=document.createElement(tag); if(className) el.className=className; el.textContent=sanitizeText(text,500); return el; }
+
+function normalizeItem(raw) {
+  const item = {
+    idFirebase: raw.idFirebase || "",
+    tipo: raw.tipo === "Consumible" ? "Consumible" : "Activo",
+    codigo: sanitizeText(raw.codigo, LIMITS.codigo),
+    nombre: sanitizeText(raw.nombre, LIMITS.nombre),
+    categoria: sanitizeText(raw.categoria, LIMITS.categoria),
+    marca: sanitizeText(raw.marca, LIMITS.marca),
+    modelo: sanitizeText(raw.modelo, LIMITS.modelo),
+    serial: sanitizeText(raw.serial, LIMITS.serial),
+    fechaIngreso: sanitizeText(raw.fechaIngreso, 20),
+    fechaEgreso: sanitizeText(raw.fechaEgreso, 20),
+    estado: ["Disponible","Asignado","En mantenimiento","Baja"].includes(raw.estado) ? raw.estado : "Disponible",
+    espacio: sanitizeText(raw.espacio, LIMITS.espacio),
+    responsable: sanitizeText(raw.responsable, LIMITS.responsable),
+    unidad: sanitizeText(raw.unidad, LIMITS.unidad),
+    espacio: sanitizeText(raw.espacio, LIMITS.espacio),
+    stockActual: Number.isSafeInteger(raw.stockActual) && raw.stockActual >= 0 ? raw.stockActual : 0,
+    stockMinimo: Number.isSafeInteger(raw.stockMinimo) && raw.stockMinimo >= 0 ? raw.stockMinimo : 0,
+    createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
+    updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : Date.now()
   };
-
-  let db = structuredClone(defaultDB);
-  let currentTab = "assets";
-  let editingAssetId = null;
-  let editingConsumableId = null;
-  let firebaseReady = false;
-
-  const $ = id => document.getElementById(id);
-  const normalize = value => String(value ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-
-  function setConnectionStatus(message, type = "") {
-    const status = document.querySelector(".storage-status");
-    if (!status) return;
-    status.className = `storage-status ${type}`;
-    status.innerHTML = `<span class="status-dot"></span> ${escapeHTML(message)}`;
-  }
-
-  function showToast(message, type="") {
-    const el = document.createElement("div");
-    el.className = `toast ${type}`;
-    el.textContent = message;
-    $("toastContainer").appendChild(el);
-    setTimeout(() => el.remove(), 3000);
-  }
-
-  function statusClass(status) {
-    return {
-      "Disponible":"available",
-      "Asignado":"assigned",
-      "Mantenimiento":"maintenance",
-      "Baja":"retired"
-    }[status] || "";
-  }
-
-  function isCritical(item) {
-    return Number(item.stock) <= Number(item.minStock);
-  }
-
-  function getCritical() {
-    return db.consumables.filter(isCritical);
-  }
-
-  function activeFilters() {
-    return {
-      search: normalize($("globalSearch").value),
-      type: $("typeFilter").value,
-      status: $("statusFilter").value,
-      category: $("categoryFilter").value
-    };
-  }
-
-  function matchesCommon(item, type, filters) {
-    if (filters.type && filters.type !== type) return false;
-    if (type === "Activo Fijo" && filters.status && item.status !== filters.status) return false;
-    if (type === "Consumible" && filters.category && item.category !== filters.category) return false;
-    if (!filters.search) return true;
-    return normalize(Object.values(item).join(" ")).includes(filters.search);
-  }
-
-  function getFilteredAssets() {
-    const f = activeFilters();
-    return db.assets.filter(a => matchesCommon(a, "Activo Fijo", f));
-  }
-
-  function getFilteredConsumables() {
-    const f = activeFilters();
-    return db.consumables.filter(c => matchesCommon(c, "Consumible", f));
-  }
-
-  function updateCategoryFilter() {
-    const select = $("categoryFilter");
-    const current = select.value;
-    const categories = [...new Set(db.consumables.map(c => c.category).filter(Boolean))].sort((a,b) => a.localeCompare(b,"es"));
-    select.innerHTML = '<option value="">Todas las categorías</option>' +
-      categories.map(c => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join("");
-    if (categories.includes(current)) select.value = current;
-  }
-
-  function renderStats() {
-    const assets = db.assets;
-    $("statAssets").textContent = assets.length;
-    $("statAvailable").textContent = assets.filter(a => a.status === "Disponible").length;
-    $("statAssigned").textContent = assets.filter(a => a.status === "Asignado").length;
-    $("statMaintenance").textContent = assets.filter(a => a.status === "Mantenimiento").length;
-
-    $("statConsumables").textContent = db.consumables.length;
-    $("statCritical").textContent = getCritical().length;
-    $("statCategories").textContent = new Set(db.consumables.map(c => c.category)).size;
-    $("criticalCount").textContent = `${getCritical().length} críticos`;
-  }
-
-  function renderAssets() {
-    const rows = getFilteredAssets();
-    $("assetCount").textContent = `${rows.length} registro${rows.length === 1 ? "" : "s"}`;
-    $("assetEmpty").style.display = rows.length ? "none" : "block";
-    $("assetTableBody").innerHTML = rows.map(a => `
-      <tr>
-        <td>${escapeHTML(a.brand)}</td>
-        <td>${escapeHTML(a.model)}</td>
-        <td><strong>${escapeHTML(a.serial)}</strong></td>
-        <td>${formatDate(a.entryDate)}</td>
-        <td>${formatDate(a.exitDate)}</td>
-        <td><span class="badge ${statusClass(a.status)}">${escapeHTML(a.status)}</span></td>
-        <td>${escapeHTML(a.responsible || "—")}</td>
-        <td><div class="action-group">
-          <button class="action-btn" data-action="edit-asset" data-id="${a.id}">Editar</button>
-          <button class="action-btn danger" data-action="delete-asset" data-id="${a.id}">Eliminar</button>
-        </div></td>
-      </tr>`).join("");
-  }
-
-  function renderConsumables() {
-    const rows = getFilteredConsumables();
-    $("consumableCount").textContent = `${rows.length} registro${rows.length === 1 ? "" : "s"}`;
-    $("consumableEmpty").style.display = rows.length ? "none" : "block";
-    $("consumableTableBody").innerHTML = rows.map(c => {
-      const critical = isCritical(c);
-      return `<tr>
-        <td><strong>${escapeHTML(c.name)}</strong></td>
-        <td>${escapeHTML(c.category)}</td>
-        <td>${escapeHTML(c.unit)}</td>
-        <td>${formatDate(c.entryDate)}</td>
-        <td class="${critical ? "critical-number" : ""}">${c.stock}</td>
-        <td>${c.minStock}</td>
-        <td><span class="badge ${critical ? "critical" : "ok"}">${critical ? "Crítico" : "Normal"}</span></td>
-        <td><div class="action-group">
-          <button class="action-btn" data-action="edit-consumable" data-id="${c.id}">Editar</button>
-          <button class="action-btn danger" data-action="delete-consumable" data-id="${c.id}">Eliminar</button>
-        </div></td>
-      </tr>`;
-    }).join("");
-  }
-
-  function renderAlerts() {
-    const rows = getCritical();
-    $("alertEmpty").style.display = rows.length ? "none" : "block";
-    $("alertTableBody").innerHTML = rows.map(c => {
-      const suggested = Math.max(1, Number(c.minStock) - Number(c.stock));
-      return `<tr>
-        <td><strong>${escapeHTML(c.name)}</strong></td>
-        <td>${escapeHTML(c.category)}</td>
-        <td>${escapeHTML(c.unit)}</td>
-        <td class="critical-number">${c.stock}</td>
-        <td>${c.minStock}</td>
-        <td><strong>${suggested}</strong></td>
-        <td><button class="action-btn" data-action="edit-consumable" data-id="${c.id}">Editar</button></td>
-      </tr>`;
-    }).join("");
-  }
-
-  function renderAll() {
-    updateCategoryFilter();
-    renderStats();
-    renderAssets();
-    renderConsumables();
-    renderAlerts();
-  }
-
-  function switchTab(tab) {
-    currentTab = tab;
-    document.querySelectorAll(".nav-btn").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === tab));
-    document.querySelectorAll(".tab-panel").forEach(panel => panel.classList.toggle("active", panel.id === `tab-${tab}`));
-    const titles = {assets:"Gestión de Activos Fijos",consumables:"Gestión de Consumibles",alerts:"Alertas y Requerimientos"};
-    $("pageTitle").textContent = titles[tab];
-    if (window.innerWidth <= 760) $("sidebar").classList.remove("open");
-  }
-
-  function resetAssetForm() {
-    editingAssetId = null;
-    $("assetId").value = "";
-    $("assetForm").reset();
-    $("assetEntryDate").value = todayISO();
-    $("assetSubmitBtn").textContent = "Guardar activo";
-    $("cancelAssetEditBtn").hidden = true;
-  }
-
-  function resetConsumableForm() {
-    editingConsumableId = null;
-    $("consumableId").value = "";
-    $("consumableForm").reset();
-    $("consumableEntryDate").value = todayISO();
-    $("consumableSubmitBtn").textContent = "Guardar consumible";
-    $("cancelConsumableEditBtn").hidden = true;
-  }
-
-  function editAsset(id) {
-    const a = db.assets.find(x => x.id === id);
-    if (!a) return;
-    editingAssetId = id;
-    $("assetId").value = id;
-    $("assetBrand").value = a.brand;
-    $("assetModel").value = a.model;
-    $("assetSerial").value = a.serial;
-    $("assetEntryDate").value = a.entryDate;
-    $("assetExitDate").value = a.exitDate || "";
-    $("assetStatus").value = a.status;
-    $("assetResponsible").value = a.responsible || "";
-    $("assetSubmitBtn").textContent = "Actualizar activo";
-    $("cancelAssetEditBtn").hidden = false;
-    switchTab("assets");
-    $("assetBrand").focus();
-  }
-
-  function editConsumable(id) {
-    const c = db.consumables.find(x => x.id === id);
-    if (!c) return;
-    editingConsumableId = id;
-    $("consumableId").value = id;
-    $("consumableName").value = c.name;
-    $("consumableCategory").value = c.category;
-    $("consumableUnit").value = c.unit;
-    $("consumableEntryDate").value = c.entryDate;
-    $("consumableStock").value = c.stock;
-    $("consumableMin").value = c.minStock;
-    $("consumableSubmitBtn").textContent = "Actualizar consumible";
-    $("cancelConsumableEditBtn").hidden = false;
-    switchTab("consumables");
-    $("consumableName").focus();
-  }
-
-  function assetFirebaseData(item) {
-    return {
-      recordType: "asset",
-      brand: item.brand,
-      model: item.model,
-      serial: item.serial,
-      entryDate: item.entryDate,
-      exitDate: item.exitDate || "",
-      status: item.status,
-      responsible: item.responsible || ""
-    };
-  }
-
-  function consumableFirebaseData(item) {
-    return {
-      recordType: "consumable",
-      name: item.name,
-      category: item.category,
-      unit: item.unit,
-      entryDate: item.entryDate,
-      stock: Number(item.stock),
-      minStock: Number(item.minStock)
-    };
-  }
-
-  // Hacer disponibles globalmente las funciones solicitadas para guardar y eliminar en Firebase.
-  window.guardarItemFirebase = function(itemData, idFirebase = null) {
-    const targetRef = idFirebase ? ref(dbFirebase, `inventario/${idFirebase}`) : push(inventarioRef);
-    return set(targetRef, itemData);
-  };
-
-  window.eliminarItemFirebase = function(idFirebase) {
-    return remove(ref(dbFirebase, `inventario/${idFirebase}`));
-  };
-
-  window.actualizarConfiguracionFirebase = function(data) {
-    return set(configuracionRef, data);
-  };
-
-  async function deleteAsset(id) {
-    const a = db.assets.find(x => x.id === id);
-    if (!a || !confirm(`¿Eliminar el activo con serial "${a.serial}"?`)) return;
-    try {
-      await window.eliminarItemFirebase(a.idFirebase || id);
-      showToast("Activo eliminado.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("No fue posible eliminar el activo en Firebase.", "error");
-    }
-  }
-
-  async function deleteConsumable(id) {
-    const c = db.consumables.find(x => x.id === id);
-    if (!c || !confirm(`¿Eliminar "${c.name}" del inventario?`)) return;
-    try {
-      await window.eliminarItemFirebase(c.idFirebase || id);
-      showToast("Consumible eliminado.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("No fue posible eliminar el consumible en Firebase.", "error");
-    }
-  }
-
-  $("assetForm").addEventListener("submit", async e => {
-    e.preventDefault();
-    if (!firebaseReady) return showToast("Firebase todavía no está listo. Intenta nuevamente.", "error");
-
-    const serial = $("assetSerial").value.trim();
-    const duplicate = db.assets.some(a => normalize(a.serial) === normalize(serial) && a.id !== editingAssetId);
-    if (duplicate) return showToast("El número de serie debe ser único.", "error");
-
-    const item = {
-      id: editingAssetId || null,
-      brand: $("assetBrand").value.trim(),
-      model: $("assetModel").value.trim(),
-      serial,
-      entryDate: $("assetEntryDate").value,
-      exitDate: $("assetExitDate").value,
-      status: $("assetStatus").value,
-      responsible: $("assetResponsible").value.trim()
-    };
-
-    try {
-      await window.guardarItemFirebase(assetFirebaseData(item), editingAssetId);
-      resetAssetForm();
-      showToast(editingAssetId ? "Activo actualizado en tiempo real." : "Activo registrado en tiempo real.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("No fue posible guardar el activo en Firebase.", "error");
-    }
-  });
-
-  $("consumableForm").addEventListener("submit", async e => {
-    e.preventDefault();
-    if (!firebaseReady) return showToast("Firebase todavía no está listo. Intenta nuevamente.", "error");
-
-    const stock = Number($("consumableStock").value);
-    const minStock = Number($("consumableMin").value);
-    if (stock < 0 || minStock < 0) return showToast("El stock no puede ser negativo.", "error");
-
-    const item = {
-      id: editingConsumableId || null,
-      name: $("consumableName").value.trim(),
-      category: $("consumableCategory").value.trim(),
-      unit: $("consumableUnit").value.trim(),
-      entryDate: $("consumableEntryDate").value,
-      stock,
-      minStock
-    };
-
-    try {
-      await window.guardarItemFirebase(consumableFirebaseData(item), editingConsumableId);
-      resetConsumableForm();
-      showToast(editingConsumableId ? "Consumible actualizado en tiempo real." : "Consumible registrado en tiempo real.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("No fue posible guardar el consumible en Firebase.", "error");
-    }
-  });
-
-  $("assetForm").addEventListener("reset", () => setTimeout(() => {
-    if (!editingAssetId) $("assetEntryDate").value = todayISO();
-  }, 0));
-  $("consumableForm").addEventListener("reset", () => setTimeout(() => {
-    if (!editingConsumableId) $("consumableEntryDate").value = todayISO();
-  }, 0));
-
-  $("cancelAssetEditBtn").addEventListener("click", resetAssetForm);
-  $("cancelConsumableEditBtn").addEventListener("click", resetConsumableForm);
-
-  document.querySelectorAll(".nav-btn").forEach(btn => btn.addEventListener("click", () => switchTab(btn.dataset.tab)));
-
-  $("globalSearch").addEventListener("input", renderAll);
-  $("typeFilter").addEventListener("change", renderAll);
-  $("statusFilter").addEventListener("change", renderAll);
-  $("categoryFilter").addEventListener("change", renderAll);
-  $("clearFiltersBtn").addEventListener("click", () => {
-    $("globalSearch").value = "";
-    $("typeFilter").value = "";
-    $("statusFilter").value = "";
-    $("categoryFilter").value = "";
-    renderAll();
-  });
-
-  document.addEventListener("click", e => {
-    const button = e.target.closest("[data-action]");
-    if (!button) return;
-    const {action,id} = button.dataset;
-    if (action === "edit-asset") editAsset(id);
-    if (action === "delete-asset") deleteAsset(id);
-    if (action === "edit-consumable") editConsumable(id);
-    if (action === "delete-consumable") deleteConsumable(id);
-  });
-
-  $("mobileMenu").addEventListener("click", () => $("sidebar").classList.toggle("open"));
-
-  // ---------------- ORDEN DE REQUERIMIENTO ----------------
-
-  let currentOrder = null;
-
-  function nextFolio() {
-    const number = Number(db.meta.nextOrderNumber || 1);
-    return `OR-${String(number).padStart(6,"0")}`;
-  }
-
-  function generateOrder() {
-    const critical = getCritical();
-    if (!critical.length) {
-      showToast("No hay consumibles en nivel crítico para generar una orden.", "error");
-      return;
-    }
-
-    currentOrder = {
-      folio: nextFolio(),
-      date: todayISO(),
-      items: critical.map(c => ({
-        ...c,
-        quantity: Math.max(1, Number(c.minStock) - Number(c.stock))
-      }))
-    };
-
-    $("orderRequester").value = "";
-    $("orderDepartment").value = "Departamento de Tecnología / Sistemas";
-    $("orderPriority").value = "Crítico";
-    $("orderStatus").value = "Pendiente de aprobación";
-    $("orderJustification").value = "Se solicita la reposición de los materiales relacionados debido a que presentan un nivel de stock igual o inferior al mínimo establecido para garantizar la continuidad operativa.";
-    updateOrderPreview();
-    $("orderModal").hidden = false;
-    $("orderModal").setAttribute("aria-hidden", "false");
-  }
-
-  function updateOrderPreview() {
-    if (!currentOrder) return;
-    $("orderFolio").textContent = currentOrder.folio;
-    $("orderDate").textContent = formatDate(currentOrder.date);
-    $("footerFolio").textContent = currentOrder.folio;
-
-    $("previewRequester").textContent = $("orderRequester").value.trim() || "Por definir";
-    $("previewDepartment").textContent = $("orderDepartment").value.trim() || "Por definir";
-    $("previewPriority").textContent = $("orderPriority").value;
-    $("previewStatus").textContent = $("orderStatus").value;
-    $("previewJustification").textContent = $("orderJustification").value.trim();
-
-    $("orderItems").innerHTML = currentOrder.items.map((c,i) => `
-      <tr>
-        <td>${i+1}</td>
-        <td>${escapeHTML(c.name)}${c.category ? ` — ${escapeHTML(c.category)}` : ""}</td>
-        <td class="stock-critical">${c.stock} ${escapeHTML(c.unit)}</td>
-        <td>${c.minStock} ${escapeHTML(c.unit)}</td>
-        <td><strong>${c.quantity} ${escapeHTML(c.unit)}</strong></td>
-      </tr>`).join("");
-  }
-
-  $("generateOrderBtn").addEventListener("click", generateOrder);
-  ["orderRequester","orderDepartment","orderPriority","orderStatus","orderJustification"].forEach(id => {
-    $(id).addEventListener("input", updateOrderPreview);
-    $(id).addEventListener("change", updateOrderPreview);
-  });
-
-  function closeOrderModal() {
-    $("orderModal").hidden = true;
-    $("orderModal").setAttribute("aria-hidden", "true");
-  }
-
-  $("closeOrderModal").addEventListener("click", closeOrderModal);
-
-  $("orderModal").addEventListener("click", e => {
-    if (e.target === $("orderModal")) closeOrderModal();
-  });
-
-  document.addEventListener("keydown", e => {
-    if (e.key === "Escape" && !$("orderModal").hidden) closeOrderModal();
-  });
-
-  async function markOrderUsed() {
-    const nextNumber = Number(db.meta.nextOrderNumber || 1) + 1;
-    try {
-      await window.actualizarConfiguracionFirebase({ nextOrderNumber: nextNumber });
-    } catch (err) {
-      console.error(err);
-      showToast("La orden se generó, pero no se pudo actualizar el consecutivo.", "error");
-    }
-  }
-
-  async function downloadOrderPDF() {
-    if (!currentOrder) return;
-    if (typeof html2pdf === "undefined") return showToast("La librería PDF no está disponible.", "error");
-
-    const paper = $("orderPaper");
-    const filename = `Orden_Requerimiento_${currentOrder.folio}.pdf`;
-    const options = {
-      margin: 0,
-      filename,
-      image: {type:"jpeg",quality:.98},
-      html2canvas: {scale:2,useCORS:true,backgroundColor:"#ffffff"},
-      jsPDF: {unit:"mm",format:"a4",orientation:"portrait"}
-    };
-    try {
-      await html2pdf().set(options).from(paper).save();
-      await markOrderUsed();
-      showToast("PDF generado correctamente.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("No fue posible generar el PDF.", "error");
-    }
-  }
-
-  async function downloadOrderWord() {
-    if (!currentOrder) return;
-    if (!window.docx || !window.saveAs) return showToast("Las librerías Word no están disponibles.", "error");
-
-    try {
-      const { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, AlignmentType, WidthType, BorderStyle } = window.docx;
-      const cell = (text, bold=false) => new TableCell({children:[new Paragraph({children:[new TextRun({text:String(text),bold})]})]});
-      const rows = currentOrder.items.map((c,i) => new TableRow({children:[
-        cell(i+1), cell(`${c.name}${c.category ? ` — ${c.category}` : ""}`), cell(`${c.stock} ${c.unit}`), cell(`${c.minStock} ${c.unit}`), cell(`${c.quantity} ${c.unit}`, true)
-      ]}));
-      const doc = new Document({sections:[{properties:{page:{size:{width:11906,height:16838}}},children:[
-        new Paragraph({alignment:AlignmentType.LEFT,children:[new TextRun({text:"SISTEMA DE CONTROL E INVENTARIO",bold:true,size:28})]}),
-        new Paragraph({alignment:AlignmentType.LEFT,children:[new TextRun({text:"DEPARTAMENTO DE TECNOLOGÍA / SISTEMAS",bold:true,size:20})]}),
-        new Paragraph({alignment:AlignmentType.LEFT,children:[new TextRun({text:"ORDEN DE REQUERIMIENTO DE CONSUMIBLES",bold:true,size:18})]}),
-        new Paragraph({children:[new TextRun({text:`Folio: ${currentOrder.folio}    Fecha: ${formatDate(currentOrder.date)}`,bold:true})]}),
-        new Paragraph({children:[new TextRun({text:`Solicitante: ${$("orderRequester").value.trim() || "Por definir"}`})]}),
-        new Paragraph({children:[new TextRun({text:`Área / Departamento: ${$("orderDepartment").value.trim() || "Por definir"}`})]}),
-        new Paragraph({children:[new TextRun({text:`Prioridad: ${$("orderPriority").value}    Estado: ${$("orderStatus").value}`})]}),
-        new Table({width:{size:100,type:WidthType.PERCENTAGE},rows:[
-          new TableRow({children:[cell("N°",true),cell("Descripción / Material",true),cell("Stock Actual",true),cell("Stock Mínimo",true),cell("Cantidad a Solicitar",true)]}),
-          ...rows
-        ]}),
-        new Paragraph({children:[new TextRun({text:"JUSTIFICACIÓN",bold:true})]}),
-        new Paragraph({children:[new TextRun({text:$("orderJustification").value.trim()})]}),
-        new Paragraph({text:""}),
-        new Table({width:{size:100,type:WidthType.PERCENTAGE},rows:[new TableRow({children:[
-          new TableCell({children:[new Paragraph({text:"____________________________"}),new Paragraph({text:"Solicitado Por"}),new Paragraph({text:"Nombre y firma"})]}),
-          new TableCell({children:[new Paragraph({text:"____________________________"}),new Paragraph({text:"Aprobado Por"}),new Paragraph({text:"Nombre y firma"})]})
-        ]})]})
-      ]}]});
-
-      const blob = await Packer.toBlob(doc);
-      saveAs(blob, `Orden_Requerimiento_${currentOrder.folio}.docx`);
-      await markOrderUsed();
-      showToast("Documento Word generado.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("No fue posible generar el documento Word.", "error");
-    }
-  }
-
-  $("downloadOrderPdfBtn").addEventListener("click", downloadOrderPDF);
-  $("downloadOrderWordBtn").addEventListener("click", downloadOrderWord);
-
-  // ---------------- EXPORTACIÓN GENERAL ----------------
-
-  function exportExcel() {
-    if (typeof XLSX === "undefined") return showToast("La librería Excel no está disponible.", "error");
-
-    const assets = getFilteredAssets().map(a => ({
-      Tipo:"Activo Fijo", Marca:a.brand, Modelo:a.model, "Número de Serie":a.serial,
-      "Fecha de Ingreso":a.entryDate, "Fecha de Egreso":a.exitDate || "",
-      Estado:a.status, Responsable:a.responsible || ""
-    }));
-    const consumables = getFilteredConsumables().map(c => ({
-      Tipo:"Consumible", Nombre:c.name, Categoría:c.category, "Unidad de Medida":c.unit,
-      "Fecha de Ingreso":c.entryDate, "Stock Actual":c.stock, "Stock Mínimo":c.minStock,
-      Nivel:isCritical(c) ? "Crítico" : "Normal"
-    }));
-
-    const wb = XLSX.utils.book_new();
-    const wsAssets = XLSX.utils.json_to_sheet(assets);
-    const wsConsumables = XLSX.utils.json_to_sheet(consumables);
-    XLSX.utils.book_append_sheet(wb, wsAssets, "Activos Fijos");
-    XLSX.utils.book_append_sheet(wb, wsConsumables, "Consumibles");
-    XLSX.writeFile(wb, `Inventario_${todayISO()}.xlsx`);
-    showToast("Excel exportado correctamente.", "success");
-  }
-
-  async function exportGeneralPDF() {
-    if (typeof html2pdf === "undefined") return showToast("La librería PDF no está disponible.", "error");
-
-    const assets = getFilteredAssets();
-    const consumables = getFilteredConsumables();
-    const wrapper = document.createElement("div");
-    wrapper.style.cssText = "width:100%;padding:25px;font-family:Arial;color:#172033;background:#fff";
-    wrapper.innerHTML = `
-      <h1 style="margin:0 0 5px;font-size:20px">Sistema de Control e Inventario</h1>
-      <p style="margin:0 0 18px;font-size:10px;color:#68758a">Exportación general · ${formatDate(todayISO())}</p>
-      <h2 style="font-size:14px">Activos Fijos (${assets.length})</h2>
-      <table style="width:100%;border-collapse:collapse;font-size:8px">
-        <thead><tr><th style="border:1px solid #ccc;padding:5px">Marca</th><th style="border:1px solid #ccc;padding:5px">Modelo</th><th style="border:1px solid #ccc;padding:5px">Serial</th><th style="border:1px solid #ccc;padding:5px">Estado</th><th style="border:1px solid #ccc;padding:5px">Responsable</th></tr></thead>
-        <tbody>${assets.map(a=>`<tr><td style="border:1px solid #ddd;padding:5px">${escapeHTML(a.brand)}</td><td style="border:1px solid #ddd;padding:5px">${escapeHTML(a.model)}</td><td style="border:1px solid #ddd;padding:5px">${escapeHTML(a.serial)}</td><td style="border:1px solid #ddd;padding:5px">${escapeHTML(a.status)}</td><td style="border:1px solid #ddd;padding:5px">${escapeHTML(a.responsible)}</td></tr>`).join("")}</tbody>
-      </table>
-      <h2 style="font-size:14px;margin-top:20px">Consumibles (${consumables.length})</h2>
-      <table style="width:100%;border-collapse:collapse;font-size:8px">
-        <thead><tr><th style="border:1px solid #ccc;padding:5px">Nombre</th><th style="border:1px solid #ccc;padding:5px">Categoría</th><th style="border:1px solid #ccc;padding:5px">Unidad</th><th style="border:1px solid #ccc;padding:5px">Stock</th><th style="border:1px solid #ccc;padding:5px">Mínimo</th><th style="border:1px solid #ccc;padding:5px">Nivel</th></tr></thead>
-        <tbody>${consumables.map(c=>`<tr><td style="border:1px solid #ddd;padding:5px">${escapeHTML(c.name)}</td><td style="border:1px solid #ddd;padding:5px">${escapeHTML(c.category)}</td><td style="border:1px solid #ddd;padding:5px">${escapeHTML(c.unit)}</td><td style="border:1px solid #ddd;padding:5px">${c.stock}</td><td style="border:1px solid #ddd;padding:5px">${c.minStock}</td><td style="border:1px solid #ddd;padding:5px">${isCritical(c)?"CRÍTICO":"Normal"}</td></tr>`).join("")}</tbody>
-      </table>`;
-    document.body.appendChild(wrapper);
-
-    try {
-      await html2pdf().set({
-        margin:8, filename:`Inventario_${todayISO()}.pdf`,
-        image:{type:"jpeg",quality:.95}, html2canvas:{scale:2},
-        jsPDF:{unit:"mm",format:"a4",orientation:"landscape"}
-      }).from(wrapper).save();
-      showToast("PDF general exportado.", "success");
-    } catch (err) {
-      console.error(err); showToast("No fue posible generar el PDF.", "error");
-    } finally { wrapper.remove(); }
-  }
-
-  $("exportExcelBtn").addEventListener("click", exportExcel);
-  $("exportPdfBtn").addEventListener("click", exportGeneralPDF);
-
-  // ---------------- BACKUP / RESTORE ----------------
-
-  $("backupBtn").addEventListener("click", () => {
-    const blob = new Blob([JSON.stringify(db,null,2)], {type:"application/json"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `Backup_Inventario_${todayISO()}.json`; a.click();
-    URL.revokeObjectURL(url);
-    showToast("Copia de seguridad exportada.", "success");
-  });
-
-  $("restoreBtn").addEventListener("click", () => $("restoreInput").click());
-
-  $("restoreInput").addEventListener("change", async e => {
-    const file = e.target.files[0];
-    if (!file) return;
-    try {
-      const parsed = JSON.parse(await file.text());
-      if (!Array.isArray(parsed.assets) || !Array.isArray(parsed.consumables)) throw new Error("Formato inválido");
-      if (!confirm("Esto reemplazará todos los registros actuales de Firebase. ¿Continuar?")) return;
-
-      const existing = {};
-      [...db.assets, ...db.consumables].forEach(item => {
-        if (item.idFirebase) existing[item.idFirebase] = null;
-      });
-
-      const writePromises = Object.keys(existing).map(key => window.eliminarItemFirebase(key));
-      await Promise.all(writePromises);
-
-      const newItems = [...parsed.assets.map(assetFirebaseData), ...parsed.consumables.map(consumableFirebaseData)];
-      await Promise.all(newItems.map(item => window.guardarItemFirebase(item)));
-      await window.actualizarConfiguracionFirebase({
-        nextOrderNumber: Number(parsed.meta?.nextOrderNumber || 1)
-      });
-
-      resetAssetForm();
-      resetConsumableForm();
-      showToast("Copia de seguridad restaurada en Firebase.", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("El archivo JSON no tiene un formato de respaldo válido o Firebase rechazó la operación.", "error");
-    } finally {
-      e.target.value = "";
-    }
-  });
-
-  // ---------------- SINCRONIZACIÓN FIREBASE ----------------
-
-  // Escuchar cambios en tiempo real y actualizar las tablas/UI.
-  onValue(inventarioRef, (snapshot) => {
-    const data = snapshot.val();
-    const inventarioArray = [];
-    if (data) {
-      Object.keys(data).forEach((key) => {
-        inventarioArray.push({ idFirebase: key, ...data[key] });
-      });
-    }
-
-    db.assets = inventarioArray
-      .filter(item => item.recordType === "asset" || (!item.recordType && item.serial !== undefined))
-      .map(item => ({ ...item, id: item.idFirebase }));
-
-    db.consumables = inventarioArray
-      .filter(item => item.recordType === "consumable" || (!item.recordType && item.name !== undefined))
-      .map(item => ({ ...item, id: item.idFirebase }));
-
-    firebaseReady = true;
-    setConnectionStatus("Sincronizado en tiempo real", "online");
-    renderAll();
-  }, (error) => {
-    console.error("Firebase Realtime Database:", error);
-    firebaseReady = false;
-    setConnectionStatus("Error de conexión con Firebase", "error");
-    showToast("No fue posible leer los datos de Firebase. Revisa las reglas de Realtime Database.", "error");
-  });
-
-  onValue(configuracionRef, (snapshot) => {
-    const data = snapshot.val() || {};
-    db.meta.nextOrderNumber = Number(data.nextOrderNumber || 1);
-  });
-
-  // Inicialización de interfaz
-  $("assetEntryDate").value = todayISO();
-  $("consumableEntryDate").value = todayISO();
-  renderAll();
-})();
-
-function formatDate(date) {
-  if (!date) return "—";
-  const [y,m,d] = String(date).split("-");
-  return y && m && d ? `${d}/${m}/${y}` : date;
+  return item;
 }
 
-function escapeHTML(value) {
-  return String(value ?? "").replace(/[&<>"']/g, c => ({
-    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
-  }[c]));
+function buildItemFromForm(formKind) {
+  if(formKind==="Consumible") {
+    const stock=safeInt($("cStock").value), minimo=safeInt($("cMinimo").value);
+    if(stock===null || minimo===null) throw new Error("Stock actual y stock mínimo deben ser números enteros no negativos.");
+    const codigo=sanitizeText($("cCodigo").value,LIMITS.codigo), nombre=sanitizeText($("cNombre").value,LIMITS.nombre);
+    if(!codigo || !nombre) throw new Error("Código y nombre son obligatorios.");
+    return normalizeItem({tipo:"Consumible",codigo,nombre,categoria:sanitizeText($("cCategoria").value,LIMITS.categoria),unidad:sanitizeText($("cUnidad").value,LIMITS.unidad),fechaIngreso:$("cFecha").value,espacio:$("cEspacio").value,stockActual:stock,stockMinimo:minimo,estado:"Disponible",createdAt:Date.now(),updatedAt:Date.now()});
+  }
+  const codigo=sanitizeText($("codigo").value,LIMITS.codigo), nombre=sanitizeText($("nombre").value,LIMITS.nombre);
+  if(!codigo || !nombre) throw new Error("Código / SKU y nombre son obligatorios.");
+  const estado=["Disponible","Asignado","En mantenimiento","Baja"].includes($("estado").value)?$("estado").value:"Disponible";
+  return normalizeItem({
+    tipo:"Activo",codigo,nombre,categoria:sanitizeText($("categoria").value,LIMITS.categoria),marca:sanitizeText($("marca").value,LIMITS.marca),modelo:sanitizeText($("modelo").value,LIMITS.modelo),serial:sanitizeText($("serial").value,LIMITS.serial),
+    fechaIngreso:$("fechaIngreso").value,fechaEgreso:$("fechaEgreso").value,estado,
+    espacio:sanitizeText($("espacio").value,LIMITS.espacio),
+    responsable:estado==="Asignado"?sanitizeText($("responsable").value,LIMITS.responsable):"",
+    stockActual:0,stockMinimo:0,createdAt:Date.now(),updatedAt:Date.now()
+  });
 }
+
+async function registrarMovimiento(item, tipoAccion, cantidad=0, espacioDestino="") {
+  const movimiento={
+    fechaHora:Date.now(),codigo:sanitizeText(item.codigo,LIMITS.codigo),nombre:sanitizeText(item.nombre,LIMITS.nombre),
+    tipoAccion:sanitizeText(tipoAccion,40),cantidad:Number.isSafeInteger(cantidad)?Math.max(0,cantidad):0,
+    espacioDestino:sanitizeText(espacioDestino,LIMITS.espacio)
+  };
+  await set(push(movimientosRef), movimiento);
+}
+
+async function guardarItemFirebase(item, existingId="") {
+  const clean=normalizeItem(item);
+  if(existingId) {
+    clean.updatedAt=Date.now();
+    const before=inventario.find(x=>x.idFirebase===existingId) || clean;
+    await update(ref(db,`inventario/${existingId}`), clean);
+    await registrarMovimiento(clean,"Edición", Math.abs(clean.tipo==="Consumible" ? clean.stockActual-before.stockActual : 0), clean.espacio);
+  } else {
+    const nuevo=push(inventarioRef);
+    await set(nuevo,clean);
+    await registrarMovimiento(clean,"Registro",clean.tipo==="Consumible"?clean.stockActual:1,clean.espacio);
+  }
+}
+window.guardarItemFirebase = guardarItemFirebase;
+
+async function eliminarItemFirebase(idFirebase) {
+  const item=inventario.find(x=>x.idFirebase===idFirebase);
+  if(!item) return;
+  await remove(ref(db,`inventario/${idFirebase}`));
+  await registrarMovimiento(item,"Eliminación",item.tipo==="Consumible"?item.stockActual:1);
+}
+window.eliminarItemFirebase=eliminarItemFirebase;
+
+async function ajustarStock(idFirebase, delta) {
+  const item = inventario.find((entry) => entry.idFirebase === idFirebase);
+  if (!item || item.tipo !== "Consumible") return;
+
+  const destination = window.prompt(
+    delta > 0 ? "Espacio/lugar de destino para la entrada:" : "Espacio/lugar de destino para la salida:",
+    item.espacio || ""
+  );
+
+  if (destination === null) {
+    showToast("Movimiento cancelado.");
+    return;
+  }
+
+  const cleanDestination = sanitizeText(destination, LIMITS.espacio);
+  const target = ref(db, `inventario/${idFirebase}/stockActual`);
+
+  const result = await runTransaction(target, (current) => {
+    const actual = safeInt(current);
+    const currentStock = actual === null ? 0 : actual;
+    const next = currentStock + delta;
+    if (!Number.isSafeInteger(next) || next < 0) return;
+    return next;
+  });
+
+  if (!result.committed) {
+    showToast("No es posible dejar el stock en un valor negativo.", true);
+    return;
+  }
+
+  const finalStock = safeInt(result.snapshot.val());
+  if (finalStock === null) {
+    showToast("Firebase devolvió un stock no válido.", true);
+    return;
+  }
+
+  await update(ref(db, `inventario/${idFirebase}`), {
+    stockActual: finalStock,
+    espacio: cleanDestination,
+    updatedAt: Date.now()
+  });
+
+  await registrarMovimiento(
+    { ...item, stockActual: finalStock, espacio: cleanDestination },
+    delta > 0 ? "Entrada (+1)" : "Salida (-1)",
+    1,
+    cleanDestination
+  );
+
+  showToast(delta > 0 ? "Entrada registrada." : "Salida registrada.");
+}
+
+function addCell(tr,text,cls="") { tr.appendChild(makeEl("td",text,cls)); }
+function button(text,cls,handler,title="") { const b=document.createElement("button"); b.type="button"; b.className="mini-btn "+cls; b.textContent=text; b.title=title||text; b.addEventListener("click",handler); return b; }
+
+function renderSummary() {
+  const assets=inventario.filter(i=>i.tipo==="Activo");
+  $("summaryTotal").textContent=String(assets.length);
+  $("summaryAvailable").textContent=String(assets.filter(i=>i.estado==="Disponible").length);
+  $("summaryAssigned").textContent=String(assets.filter(i=>i.estado==="Asignado").length);
+  $("summaryMaintenance").textContent=String(assets.filter(i=>i.estado==="En mantenimiento").length);
+}
+
+function renderizarInventario(items) {
+  inventario=items.map(normalizeItem);
+  setSync("Sincronizado en tiempo real","ok");
+  renderSummary();
+  renderSummary(); renderInventoryTable(); renderFilters(); renderCriticals();
+}
+window.renderizarInventario=renderizarInventario;
+
+function filteredInventory() {
+  const q=sanitizeText($("globalSearch").value,120).toLowerCase();
+  const type=$("filterType").value,status=$("filterStatus").value,cat=$("filterCategory").value,space=$("filterSpace").value;
+  return inventario.filter(i=>{
+    const hay=!q || [i.codigo,i.nombre,i.serial,i.marca,i.modelo,i.categoria,i.responsable,i.espacio].join(" ").toLowerCase().includes(q);
+    return hay && (!type||i.tipo===type) && (!status||i.estado===status) && (!cat||i.categoria===cat) && (!space||i.espacio===space);
+  });
+}
+function renderInventoryTable() {
+  const body=$("inventoryTableBody"); body.replaceChildren();
+  const data=filteredInventory();
+  for(const item of data) {
+    const tr=document.createElement("tr");
+    addCell(tr,item.tipo); addCell(tr,item.codigo); addCell(tr,item.nombre); addCell(tr,item.categoria); addCell(tr,item.estado);
+    addCell(tr,item.espacio); addCell(tr,item.responsable);
+    const stockTd=document.createElement("td");
+    if(item.tipo==="Consumible") {
+      const wrap=document.createElement("div"); wrap.className="stock-control";
+      wrap.append(button("−","minus",()=>ajustarStock(item.idFirebase,-1),"Salida -1"));
+      wrap.append(makeEl("strong",String(item.stockActual)));
+      wrap.append(button("+","plus",()=>ajustarStock(item.idFirebase,1),"Entrada +1"));
+      stockTd.appendChild(wrap);
+    } else stockTd.textContent="—";
+    tr.appendChild(stockTd);
+    const act=document.createElement("td"); act.className="actions";
+    act.append(button("Editar","edit",()=>editItem(item)));
+     act.append(button("Copiar","copy",()=>duplicateItem(item),"Duplicar registro"));
+    act.append(button("Eliminar","delete",async()=>{if(confirm(`¿Eliminar "${item.nombre}"?`)){try{await eliminarItemFirebase(item.idFirebase)}catch(e){showToast("No se pudo eliminar.",true)}}}));
+    tr.appendChild(act); body.appendChild(tr);
+  }
+  $("inventoryCount").textContent=`${data.length} registros`;
+}
+function renderFilters() {
+  const select=$("filterCategory"), spaceSelect=$("filterSpace");
+  const current=select.value, currentSpace=spaceSelect.value;
+  const cats=[...new Set(inventario.map(i=>i.categoria).filter(Boolean))].sort();
+  const spaces=[...new Set(inventario.map(i=>i.espacio).filter(Boolean))].sort();
+  select.replaceChildren(new Option("Todas las categorías",""));
+  spaceSelect.replaceChildren(new Option("Todos los espacios físicos",""));
+  cats.forEach(c=>select.appendChild(new Option(c,c)));
+  spaces.forEach(c=>spaceSelect.appendChild(new Option(c,c)));
+  select.value=cats.includes(current)?current:"";
+  spaceSelect.value=spaces.includes(currentSpace)?currentSpace:"";
+}
+function renderCriticals() {
+  const critical=inventario.filter(i=>i.tipo==="Consumible" && i.stockActual<=i.stockMinimo);
+  $("criticalBadge").textContent=String(critical.length);
+  const box=$("criticalList"); box.replaceChildren();
+  if(!critical.length){box.appendChild(makeEl("p","No hay consumibles en nivel crítico.","muted"));return}
+  critical.forEach(i=>{const card=document.createElement("article");card.className="critical-item";card.append(makeEl("h3",i.nombre),makeEl("p",`Código: ${i.codigo}`),makeEl("p",`Stock actual: ${i.stockActual}`,"critical-number"),makeEl("p",`Stock mínimo: ${i.stockMinimo}`));box.appendChild(card)});
+}
+function renderMovements() {
+  const body=$("movementTableBody");body.replaceChildren();
+  movimientos.slice().sort((a,b)=>(b.fechaHora||0)-(a.fechaHora||0)).forEach(m=>{const tr=document.createElement("tr");addCell(tr,fmtDateTime(m.fechaHora));addCell(tr,m.codigo);addCell(tr,m.nombre);addCell(tr,m.tipoAccion);addCell(tr,String(m.cantidad));addCell(tr,m.espacioDestino);body.appendChild(tr)});
+}
+
+function editItem(item) {
+  activateTab(item.tipo==="Consumible"?"consumibles":"activos");
+  if(item.tipo==="Consumible"){ $("cEditingId").value=item.idFirebase;$("cCodigo").value=item.codigo;$("cNombre").value=item.nombre;$("cCategoria").value=item.categoria;$("cUnidad").value=item.unidad;$("cFecha").value=item.fechaIngreso;$("cEspacio").value=item.espacio;$("cStock").value=item.stockActual;$("cMinimo").value=item.stockMinimo; showToast("Editando consumible."); return; }
+  $("editingId").value=item.idFirebase;$("codigo").value=item.codigo;$("nombre").value=item.nombre;$("categoria").value=item.categoria;$("marca").value=item.marca;$("modelo").value=item.modelo;$("serial").value=item.serial;$("fechaIngreso").value=item.fechaIngreso;$("fechaEgreso").value=item.fechaEgreso;$("estado").value=item.estado;$("espacio").value=item.espacio;$("responsable").value=item.responsable;toggleLocationFields();$("saveItemBtn").textContent="Guardar cambios";
+}
+function clearAssetForm(){ $("assetForm").reset();$("editingId").value="";$("saveItemBtn").textContent="Guardar activo";toggleLocationFields(); }
+function toggleLocationFields(){const assigned=$("estado").value==="Asignado";$("responsableField").classList.toggle("hidden",!assigned)}
+
+function duplicateItem(item) {
+  if (item.tipo === "Consumible") {
+    activateTab("consumibles");
+    $("cEditingId").value="";
+    $("cCodigo").value="";
+    $("cNombre").value=item.nombre;
+    $("cCategoria").value=item.categoria;
+    $("cUnidad").value=item.unidad;
+    $("cFecha").value=item.fechaIngreso;
+    $("cEspacio").value=item.espacio;
+    $("cStock").value="0";
+    $("cMinimo").value=String(item.stockMinimo);
+    showToast("Copia preparada. Escriba un nuevo código.");
+    return;
+  }
+
+  activateTab("activos");
+  $("editingId").value="";
+  $("codigo").value="";
+  $("nombre").value=item.nombre;
+  $("categoria").value=item.categoria;
+  $("marca").value=item.marca;
+  $("modelo").value=item.modelo;
+  $("serial").value="";
+  $("fechaIngreso").value="";
+  $("fechaEgreso").value="";
+  $("estado").value="Disponible";
+  $("espacio").value=item.espacio;
+  $("responsable").value="";
+  $("saveItemBtn").textContent="Guardar activo";
+  toggleLocationFields();
+  showToast("Registro copiado. Código y serial quedaron vacíos.");
+}
+
+function generateSku() {
+  const cat=sanitizeText($("categoria").value,LIMITS.categoria).toUpperCase();
+  const aliases={CCTV:"CCTV",REDES:"RED",RED:"RED",AUDIO:"AUD",AUDIOVISUAL:"AUD",COMPUTO:"COMP",CÓMPUTO:"COMP"};
+  let prefix=aliases[cat] || cat.replace(/[^A-Z0-9]/g,"").slice(0,4) || "GEN";
+  const count=inventario.filter(i=>i.categoria.toUpperCase()===cat && i.codigo.startsWith(prefix+"-")).length+1;
+  $("codigo").value=`${prefix}-${String(count).padStart(3,"0")}`;
+}
+
+function beep() {
+  try {
+    const AudioContextClass = globalThis.AudioContext || globalThis.webkitAudioContext;
+    if (!AudioContextClass) return;
+    const audioContext = new AudioContextClass();
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    oscillator.frequency.value = 880;
+    gain.gain.setValueAtTime(0.08, audioContext.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.12);
+    oscillator.connect(gain);
+    gain.connect(audioContext.destination);
+    oscillator.start();
+    oscillator.stop(audioContext.currentTime + 0.13);
+    oscillator.addEventListener("ended", () => {
+      audioContext.close().catch((error) => console.warn("No se pudo cerrar AudioContext:", error));
+    }, { once: true });
+  } catch (error) {
+    console.warn("No fue posible reproducir el beep:", error);
+  }
+}
+
+async function startScanner() {
+  $("scannerModal").hidden=false;$("scannerModal").setAttribute("aria-hidden","false");
+  await new Promise(r=>setTimeout(r,80));
+  if(!globalThis.Html5Qrcode){showToast("No se pudo cargar Html5-QRCode.",true);return}
+  scanner=new globalThis.Html5Qrcode("reader");
+  try{
+    await scanner.start({facingMode:{ideal:"environment"}},{fps:10,qrbox:{width:260,height:180}},async text=>{
+      $("codigo").value=sanitizeText(text,LIMITS.codigo);beep();await stopScanner();showToast("Código detectado.");
+    },()=>{});
+    scannerRunning=true;
+  }catch(e){await stopScanner();showToast("No se pudo abrir la cámara. Verifique permisos y HTTPS.",true)}
+}
+async function stopScanner() {
+  try{if(scanner&&scannerRunning)await scanner.stop()}catch{} finally {scannerRunning=false;try{if(scanner)await scanner.clear()}catch{}scanner=null;$("scannerModal").hidden=true;$("scannerModal").setAttribute("aria-hidden","true")}
+}
+
+function buildOrderDocument() {
+  const critical=inventario.filter(i=>i.tipo==="Consumible"&&i.stockActual<=i.stockMinimo);
+  const root=$("orderDocument");root.replaceChildren();
+  const folio=`REQ-${new Date().getFullYear()}-${String(orderCounter++).padStart(4,"0")}`;
+  const header=document.createElement("div");header.className="order-header";
+  const left=document.createElement("div");left.className="order-title";left.append(makeEl("h2","SISTEMA DE GESTIÓN DE INVENTARIO"),makeEl("p","Orden de Requerimiento de Consumibles"));
+  const right=document.createElement("div");right.className="order-meta";right.append(makeEl("p",`Folio: ${folio}`),makeEl("p",`Fecha: ${new Date().toLocaleDateString("es-CO")}`));header.append(left,right);root.appendChild(header);
+  const data=document.createElement("div");data.className="order-data";
+  [["Solicitante","Área TIC"],["Área/Departamento","Gestión de Inventario"],["Nivel de Prioridad",critical.length?"Alta / Crítico":"Normal"],["Estado","Pendiente de aprobación"]].forEach(([a,b])=>{const x=document.createElement("div");x.className="order-box";x.append(makeEl("strong",a),document.createElement("br"),makeEl("span",b));data.appendChild(x)});root.appendChild(data);
+  const table=document.createElement("table");table.className="order-table";const thead=document.createElement("thead"),hr=document.createElement("tr");["N°","Descripción / Material","Stock Actual","Stock Mínimo","Cantidad a Solicitar"].forEach(h=>hr.appendChild(makeEl("th",h)));thead.appendChild(hr);table.appendChild(thead);const tbody=document.createElement("tbody");
+  critical.forEach((i,n)=>{const tr=document.createElement("tr");[String(n+1),i.nombre,String(i.stockActual),String(i.stockMinimo),String(Math.max(1,i.stockMinimo-i.stockActual+1))].forEach((v,k)=>addCell(tr,v,k===2?"danger-cell":""));tbody.appendChild(tr)});table.appendChild(tbody);root.appendChild(table);
+  const just=document.createElement("div");just.className="justification";just.append(makeEl("strong","Justificación"),makeEl("p",critical.length?"Reposición de consumibles que se encuentran en nivel crítico o por debajo del mínimo establecido.":"No existen consumibles críticos."));root.appendChild(just);
+  const signs=document.createElement("div");signs.className="signatures";["Solicitado Por","Aprobado Por"].forEach(s=>signs.appendChild(makeEl("div",s,"signature")));root.appendChild(signs);
+}
+function openOrder(){buildOrderDocument();$("orderModal").hidden=false;$("orderModal").setAttribute("aria-hidden","false")}
+function closeOrder(){$("orderModal").hidden=true;$("orderModal").setAttribute("aria-hidden","true")}
+function exportExcel(){const rows=filteredInventory().map(i=>({Tipo:i.tipo,Código:i.codigo,Nombre:i.nombre,Categoría:i.categoria,Marca:i.marca,Modelo:i.modelo,Serial:i.serial,Estado:i.estado,"Espacio Físico / Ubicación":i.espacio,Responsable:i.responsable,Unidad:i.unidad,Stock:i.stockActual,Stock_Mínimo:i.stockMinimo,Fecha_Ingreso:i.fechaIngreso,Fecha_Egreso:i.fechaEgreso}));const ws=XLSX.utils.json_to_sheet(rows);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"Inventario");XLSX.writeFile(wb,"inventario.xlsx")}
+function exportPdf(){const wrap=document.createElement("div");const title=makeEl("h2","Inventario");wrap.appendChild(title);const table=document.querySelector(".table-card table").cloneNode(true);wrap.appendChild(table);html2pdf().set({margin:8,filename:"inventario.pdf",html2canvas:{scale:2},jsPDF:{orientation:"landscape",unit:"mm",format:"a4"}}).from(wrap).save()}
+async function exportOrderWord(){
+  if(!window.docx){showToast("La librería DOCX no está disponible.",true);return}
+  const {Document,Packer,Paragraph,Table,TableRow,TableCell,TextRun,WidthType}=window.docx;
+  const critical=inventario.filter(i=>i.tipo==="Consumible"&&i.stockActual<=i.stockMinimo);
+  const rows=[new TableRow({children:["N°","Descripción / Material","Stock Actual","Stock Mínimo","Cantidad a Solicitar"].map(x=>new TableCell({children:[new Paragraph(x)]}))})];
+  critical.forEach((i,n)=>rows.push(new TableRow({children:[n+1,i.nombre,i.stockActual,i.stockMinimo,Math.max(1,i.stockMinimo-i.stockActual+1)].map(x=>new TableCell({children:[new Paragraph(String(x))]}))})));
+  const doc=new Document({sections:[{children:[new Paragraph({children:[new TextRun({text:"SISTEMA DE GESTIÓN DE INVENTARIO",bold:true,size:28})]}),new Paragraph("Orden de Requerimiento de Consumibles"),new Paragraph(`Fecha: ${new Date().toLocaleDateString("es-CO")}`),new Table({rows,width:{size:100,type:WidthType.PERCENTAGE}}),new Paragraph("Justificación: Reposición de consumibles en nivel crítico."),new Paragraph("\n\n__________________________                         __________________________\nSolicitado Por                                                     Aprobado Por")]}]});
+  saveAs(await Packer.toBlob(doc),"orden_requerimiento.docx");
+}
+function exportJson(){const data={inventario,movimientos,exportadoEn:Date.now()};const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});saveAs(blob,"backup_inventario.json")}
+async function importJson(file){if(!file)return;try{const data=JSON.parse(await file.text());if(!Array.isArray(data.inventario))throw new Error();if(!confirm("Esto agregará los registros del respaldo a Firebase. ¿Continuar?"))return;for(const raw of data.inventario){const item=normalizeItem(raw);delete item.idFirebase;await set(push(inventarioRef),item)}if(Array.isArray(data.movimientos)){for(const m of data.movimientos)await set(push(movimientosRef),{fechaHora:Number(m.fechaHora)||Date.now(),codigo:sanitizeText(m.codigo,LIMITS.codigo),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0})}showToast("Copia importada correctamente.");}catch{showToast("Archivo JSON inválido.",true)}}
+function activateTab(id){document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===id));document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x.dataset.tab===id))}
+
+document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>activateTab(b.dataset.tab)));
+["globalSearch","filterType","filterStatus","filterCategory","filterSpace"].forEach(id=>$(id).addEventListener("input",renderInventoryTable));
+$("clearFiltersBtn").addEventListener("click",()=>{$("globalSearch").value="";$("filterType").value="";$("filterStatus").value="";$("filterCategory").value="";$("filterSpace").value="";renderInventoryTable()});
+$("estado").addEventListener("change",toggleLocationFields);$("generateSkuBtn").addEventListener("click",generateSku);$("scanBtn").addEventListener("click",startScanner);$("closeScannerBtn").addEventListener("click",stopScanner);
+$("scannerModal").addEventListener("click",e=>{if(e.target===$("scannerModal"))stopScanner()});$("orderModal").addEventListener("click",e=>{if(e.target===$("orderModal"))closeOrder()});$("closeOrderModal").addEventListener("click",closeOrder);
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("scannerModal").hidden)stopScanner();if(!$("orderModal").hidden)closeOrder()}});
+$("assetForm").addEventListener("submit",async e=>{e.preventDefault();try{const item=buildItemFromForm("Activo"),id=$("editingId").value;if(!id)item.createdAt=Date.now();await guardarItemFirebase(item,id);clearAssetForm();showToast(id?"Cambios guardados.":"Activo registrado.");}catch(err){showToast(err.message||"No se pudo guardar.",true)}});
+$("consumableForm").addEventListener("submit",async e=>{e.preventDefault();try{const item=buildItemFromForm("Consumible"),id=$("cEditingId").value;if(!id)item.createdAt=Date.now();else{const prev=inventario.find(x=>x.idFirebase===id);if(prev)item.createdAt=prev.createdAt;await guardarItemFirebase(item,id);$("consumableForm").reset();$("cEditingId").value="";showToast("Cambios guardados.");return;}await guardarItemFirebase(item);$("consumableForm").reset();$("cEditingId").value="";showToast("Consumible registrado.");}catch(err){showToast(err.message||"No se pudo guardar.",true)}});
+$("cancelEditBtn").addEventListener("click",clearAssetForm);$("clearConsumableBtn").addEventListener("click",()=>{$("consumableForm").reset();$("cEditingId").value=""});
+$("generateOrderBtn").addEventListener("click",openOrder);$("downloadOrderPdfBtn").addEventListener("click",()=>html2pdf().set({margin:8,filename:"orden_requerimiento.pdf",html2canvas:{scale:2},jsPDF:{unit:"mm",format:"a4"}}).from($("orderDocument")).save());$("downloadOrderWordBtn").addEventListener("click",exportOrderWord);
+$("exportExcelBtn").addEventListener("click",exportExcel);$("exportPdfBtn").addEventListener("click",exportPdf);$("exportJsonBtn").addEventListener("click",exportJson);$("importJsonInput").addEventListener("change",e=>importJson(e.target.files[0]));
+window.addEventListener("beforeunload",()=>{if(scannerRunning&&scanner)scanner.stop().catch(()=>{})});
+
+onValue(inventarioRef,snapshot=>{const data=snapshot.val()||{};renderizarInventario(Object.entries(data).map(([id,v])=>({idFirebase:id,...v})));},err=>{setSync("Error de conexión","error");showToast("Firebase rechazó la lectura. Revise las reglas.",true)});
+onValue(movimientosRef,snapshot=>{const data=snapshot.val()||{};movimientos=Object.values(data).map(m=>({fechaHora:Number(m.fechaHora)||0,codigo:sanitizeText(m.codigo,LIMITS.codigo),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)}));renderMovements();},()=>setSync("Error de movimientos","error"));
+toggleLocationFields();
