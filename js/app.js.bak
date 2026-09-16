@@ -21,7 +21,6 @@ let inventario = [];
 let movimientos = [];
 let scanner = null;
 let scannerRunning = false;
-let currentEditingId = "";
 let orderCounter = 1;
 
 const LIMITS = { codigo:80, nombre:140, categoria:80, marca:80, modelo:100, serial:100, espacio:120, responsable:120, unidad:40 };
@@ -106,25 +105,16 @@ async function registrarMovimiento(item, tipoAccion, cantidad=0, espacioDestino=
 
 async function guardarItemFirebase(item, existingId="") {
   const clean=normalizeItem(item);
-  const id=String(existingId || "").trim();
-
-  if(id) {
-    const before=inventario.find(x=>x.idFirebase===id);
-    if(!before) throw new Error("No se encontró el registro original para editarlo. Vuelva a cargar la página e inténtelo de nuevo.");
-
-    clean.idFirebase=id;
-    clean.createdAt=before.createdAt;
+  if(existingId) {
     clean.updatedAt=Date.now();
-    await update(ref(db,`inventario/${id}`), clean);
+    const before=inventario.find(x=>x.idFirebase===existingId) || clean;
+    await update(ref(db,`inventario/${existingId}`), clean);
     await registrarMovimiento(clean,"Edición", Math.abs(clean.tipo==="Consumible" ? clean.stockActual-before.stockActual : 0), clean.espacio);
-    return;
+  } else {
+    const nuevo=push(inventarioRef);
+    await set(nuevo,clean);
+    await registrarMovimiento(clean,"Registro",clean.tipo==="Consumible"?clean.stockActual:1,clean.espacio);
   }
-
-  const nuevo=push(inventarioRef);
-  clean.createdAt=Date.now();
-  clean.updatedAt=Date.now();
-  await set(nuevo,clean);
-  await registrarMovimiento(clean,"Registro",clean.tipo==="Consumible"?clean.stockActual:1,clean.espacio);
 }
 window.guardarItemFirebase = guardarItemFirebase;
 
@@ -203,7 +193,7 @@ function renderizarInventario(items) {
   inventario=items.map(normalizeItem);
   setSync("Sincronizado en tiempo real","ok");
   renderSummary();
-  renderInventoryTable(); renderFilters(); renderCriticals();
+  renderSummary(); renderInventoryTable(); renderFilters(); renderCriticals();
 }
 window.renderizarInventario=renderizarInventario;
 
@@ -264,50 +254,14 @@ function renderMovements() {
 }
 
 function editItem(item) {
-  currentEditingId=item.idFirebase;
   activateTab(item.tipo==="Consumible"?"consumibles":"activos");
-
-  if(item.tipo==="Consumible"){
-    $("cEditingId").value=item.idFirebase;
-    $("cCodigo").value=item.codigo;
-    $("cNombre").value=item.nombre;
-    $("cCategoria").value=item.categoria;
-    $("cUnidad").value=item.unidad;
-    $("cFecha").value=item.fechaIngreso;
-    $("cEspacio").value=item.espacio;
-    $("cStock").value=item.stockActual;
-    $("cMinimo").value=item.stockMinimo;
-    showToast("Editando consumible.");
-    return;
-  }
-
-  $("editingId").value=item.idFirebase;
-  $("codigo").value=item.codigo;
-  $("nombre").value=item.nombre;
-  $("categoria").value=item.categoria;
-  $("marca").value=item.marca;
-  $("modelo").value=item.modelo;
-  $("serial").value=item.serial;
-  $("fechaIngreso").value=item.fechaIngreso;
-  $("fechaEgreso").value=item.fechaEgreso;
-  $("estado").value=item.estado;
-  $("espacio").value=item.espacio;
-  $("responsable").value=item.responsable;
-  toggleLocationFields();
-  $("saveItemBtn").textContent="Guardar cambios";
-  showToast("Editando activo.");
+  if(item.tipo==="Consumible"){ $("cEditingId").value=item.idFirebase;$("cCodigo").value=item.codigo;$("cNombre").value=item.nombre;$("cCategoria").value=item.categoria;$("cUnidad").value=item.unidad;$("cFecha").value=item.fechaIngreso;$("cEspacio").value=item.espacio;$("cStock").value=item.stockActual;$("cMinimo").value=item.stockMinimo; showToast("Editando consumible."); return; }
+  $("editingId").value=item.idFirebase;$("codigo").value=item.codigo;$("nombre").value=item.nombre;$("categoria").value=item.categoria;$("marca").value=item.marca;$("modelo").value=item.modelo;$("serial").value=item.serial;$("fechaIngreso").value=item.fechaIngreso;$("fechaEgreso").value=item.fechaEgreso;$("estado").value=item.estado;$("espacio").value=item.espacio;$("responsable").value=item.responsable;toggleLocationFields();$("saveItemBtn").textContent="Guardar cambios";
 }
-function clearAssetForm(){
-  $("assetForm").reset();
-  $("editingId").value="";
-  currentEditingId="";
-  $("saveItemBtn").textContent="Guardar activo";
-  toggleLocationFields();
-}
+function clearAssetForm(){ $("assetForm").reset();$("editingId").value="";$("saveItemBtn").textContent="Guardar activo";toggleLocationFields(); }
 function toggleLocationFields(){const assigned=$("estado").value==="Asignado";$("responsableField").classList.toggle("hidden",!assigned)}
 
 function duplicateItem(item) {
-  currentEditingId="";
   if (item.tipo === "Consumible") {
     activateTab("consumibles");
     $("cEditingId").value="";
@@ -372,70 +326,19 @@ function beep() {
 }
 
 async function startScanner() {
-  if (window.isSecureContext === false) {
-    showToast("El escáner necesita HTTPS o localhost para usar la cámara.",true);
-    return;
-  }
-  if (!navigator.mediaDevices?.getUserMedia) {
-    showToast("Este navegador no permite acceso a la cámara.",true);
-    return;
-  }
-  if (!globalThis.Html5Qrcode) {
-    showToast("No se pudo cargar el módulo del escáner. Revise su conexión y vuelva a intentar.",true);
-    return;
-  }
-
-  await stopScanner();
-  $("scannerModal").hidden=false;
-  $("scannerModal").setAttribute("aria-hidden","false");
+  $("scannerModal").hidden=false;$("scannerModal").setAttribute("aria-hidden","false");
   await new Promise(r=>setTimeout(r,80));
-
+  if(!globalThis.Html5Qrcode){showToast("No se pudo cargar Html5-QRCode.",true);return}
   scanner=new globalThis.Html5Qrcode("reader");
-  const config={fps:10,qrbox:{width:260,height:180},aspectRatio:1.7778};
-  const onScan=async text=>{
-    $("codigo").value=sanitizeText(text,LIMITS.codigo);
-    beep();
-    await stopScanner();
-    showToast("Código detectado.");
-  };
-
-  try {
-    // Primero se intenta la cámara trasera; si el dispositivo no acepta facingMode,
-    // se consulta la lista de cámaras y se usa la que parezca trasera.
-    try {
-      await scanner.start({facingMode:"environment"},config,onScan,()=>{});
-    } catch (firstError) {
-      const cameras=await globalThis.Html5Qrcode.getCameras();
-      if(!cameras?.length) throw firstError;
-      const rear=cameras.find(c=>/back|rear|environment|trasera|posterior/i.test(c.label)) || cameras[cameras.length-1];
-      await scanner.start(rear.id,config,onScan,()=>{});
-    }
+  try{
+    await scanner.start({facingMode:{ideal:"environment"}},{fps:10,qrbox:{width:260,height:180}},async text=>{
+      $("codigo").value=sanitizeText(text,LIMITS.codigo);beep();await stopScanner();showToast("Código detectado.");
+    },()=>{});
     scannerRunning=true;
-  } catch (e) {
-    await stopScanner();
-    const name=e?.name || "Error";
-    let message="No se pudo abrir la cámara.";
-    if(name==="NotAllowedError" || name==="PermissionDeniedError") message="Permiso de cámara bloqueado. Permita la cámara para este sitio y vuelva a pulsar Escanear.";
-    else if(name==="NotFoundError") message="No se encontró una cámara disponible.";
-    else if(name==="NotReadableError") message="La cámara está siendo usada por otra aplicación o no está disponible.";
-    else if(name==="SecurityError") message="El navegador bloqueó el acceso a la cámara por seguridad. Use HTTPS.";
-    showToast(message,true);
-    console.error("Error del escáner:",e);
-  }
+  }catch(e){await stopScanner();showToast("No se pudo abrir la cámara. Verifique permisos y HTTPS.",true)}
 }
-
 async function stopScanner() {
-  try {
-    if(scanner && scannerRunning) await scanner.stop();
-  } catch(e) {
-    console.warn("No se pudo detener el escáner:",e);
-  } finally {
-    scannerRunning=false;
-    try { if(scanner) await scanner.clear(); } catch(e) { console.warn("No se pudo limpiar el escáner:",e); }
-    scanner=null;
-    $("scannerModal").hidden=true;
-    $("scannerModal").setAttribute("aria-hidden","true");
-  }
+  try{if(scanner&&scannerRunning)await scanner.stop()}catch{} finally {scannerRunning=false;try{if(scanner)await scanner.clear()}catch{}scanner=null;$("scannerModal").hidden=true;$("scannerModal").setAttribute("aria-hidden","true")}
 }
 
 function buildOrderDocument() {
@@ -466,7 +369,7 @@ async function exportOrderWord(){
   saveAs(await Packer.toBlob(doc),"orden_requerimiento.docx");
 }
 function exportJson(){const data={inventario,movimientos,exportadoEn:Date.now()};const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});saveAs(blob,"backup_inventario.json")}
-async function importJson(file){if(!file)return;try{const data=JSON.parse(await file.text());if(!Array.isArray(data.inventario))throw new Error();if(!confirm("Esto agregará los registros del respaldo a Firebase. ¿Continuar?"))return;for(const raw of data.inventario){const item=normalizeItem(raw);delete item.idFirebase;await set(push(inventarioRef),item)}if(Array.isArray(data.movimientos)){for(const m of data.movimientos)await set(push(movimientosRef),{fechaHora:Number(m.fechaHora)||Date.now(),codigo:sanitizeText(m.codigo,LIMITS.codigo),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)})}showToast("Copia importada correctamente.");}catch{showToast("Archivo JSON inválido.",true)}}
+async function importJson(file){if(!file)return;try{const data=JSON.parse(await file.text());if(!Array.isArray(data.inventario))throw new Error();if(!confirm("Esto agregará los registros del respaldo a Firebase. ¿Continuar?"))return;for(const raw of data.inventario){const item=normalizeItem(raw);delete item.idFirebase;await set(push(inventarioRef),item)}if(Array.isArray(data.movimientos)){for(const m of data.movimientos)await set(push(movimientosRef),{fechaHora:Number(m.fechaHora)||Date.now(),codigo:sanitizeText(m.codigo,LIMITS.codigo),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0})}showToast("Copia importada correctamente.");}catch{showToast("Archivo JSON inválido.",true)}}
 function activateTab(id){document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===id));document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x.dataset.tab===id))}
 
 document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>activateTab(b.dataset.tab)));
@@ -475,43 +378,9 @@ $("clearFiltersBtn").addEventListener("click",()=>{$("globalSearch").value="";$(
 $("estado").addEventListener("change",toggleLocationFields);$("generateSkuBtn").addEventListener("click",generateSku);$("scanBtn").addEventListener("click",startScanner);$("closeScannerBtn").addEventListener("click",stopScanner);
 $("scannerModal").addEventListener("click",e=>{if(e.target===$("scannerModal"))stopScanner()});$("orderModal").addEventListener("click",e=>{if(e.target===$("orderModal"))closeOrder()});$("closeOrderModal").addEventListener("click",closeOrder);
 document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("scannerModal").hidden)stopScanner();if(!$("orderModal").hidden)closeOrder()}});
-$("assetForm").addEventListener("submit",async e=>{
-  e.preventDefault();
-  try {
-    const item=buildItemFromForm("Activo");
-    const id=String(currentEditingId || $("editingId").value || "").trim();
-    if(id){
-      const previous=inventario.find(x=>x.idFirebase===id);
-      if(!previous) throw new Error("El registro que intenta editar ya no está disponible. Recargue la página.");
-      item.createdAt=previous.createdAt;
-    }
-    await guardarItemFirebase(item,id);
-    clearAssetForm();
-    showToast(id?"Cambios guardados correctamente.":"Activo registrado.");
-  } catch(err) {
-    showToast(err.message||"No se pudo guardar.",true);
-  }
-});
-$("consumableForm").addEventListener("submit",async e=>{
-  e.preventDefault();
-  try {
-    const item=buildItemFromForm("Consumible");
-    const id=String(currentEditingId || $("cEditingId").value || "").trim();
-    if(id){
-      const previous=inventario.find(x=>x.idFirebase===id);
-      if(!previous) throw new Error("El consumible que intenta editar ya no está disponible. Recargue la página.");
-      item.createdAt=previous.createdAt;
-    }
-    await guardarItemFirebase(item,id);
-    $("consumableForm").reset();
-    $("cEditingId").value="";
-    currentEditingId="";
-    showToast(id?"Cambios guardados correctamente.":"Consumible registrado.");
-  } catch(err) {
-    showToast(err.message||"No se pudo guardar.",true);
-  }
-});
-$("cancelEditBtn").addEventListener("click",clearAssetForm);$("clearConsumableBtn").addEventListener("click",()=>{$("consumableForm").reset();$("cEditingId").value="";currentEditingId="";});
+$("assetForm").addEventListener("submit",async e=>{e.preventDefault();try{const item=buildItemFromForm("Activo"),id=$("editingId").value;if(!id)item.createdAt=Date.now();await guardarItemFirebase(item,id);clearAssetForm();showToast(id?"Cambios guardados.":"Activo registrado.");}catch(err){showToast(err.message||"No se pudo guardar.",true)}});
+$("consumableForm").addEventListener("submit",async e=>{e.preventDefault();try{const item=buildItemFromForm("Consumible"),id=$("cEditingId").value;if(!id)item.createdAt=Date.now();else{const prev=inventario.find(x=>x.idFirebase===id);if(prev)item.createdAt=prev.createdAt;await guardarItemFirebase(item,id);$("consumableForm").reset();$("cEditingId").value="";showToast("Cambios guardados.");return;}await guardarItemFirebase(item);$("consumableForm").reset();$("cEditingId").value="";showToast("Consumible registrado.");}catch(err){showToast(err.message||"No se pudo guardar.",true)}});
+$("cancelEditBtn").addEventListener("click",clearAssetForm);$("clearConsumableBtn").addEventListener("click",()=>{$("consumableForm").reset();$("cEditingId").value=""});
 $("generateOrderBtn").addEventListener("click",openOrder);$("downloadOrderPdfBtn").addEventListener("click",()=>html2pdf().set({margin:8,filename:"orden_requerimiento.pdf",html2canvas:{scale:2},jsPDF:{unit:"mm",format:"a4"}}).from($("orderDocument")).save());$("downloadOrderWordBtn").addEventListener("click",exportOrderWord);
 $("exportExcelBtn").addEventListener("click",exportExcel);$("exportPdfBtn").addEventListener("click",exportPdf);$("exportJsonBtn").addEventListener("click",exportJson);$("importJsonInput").addEventListener("change",e=>importJson(e.target.files[0]));
 window.addEventListener("beforeunload",()=>{if(scannerRunning&&scanner)scanner.stop().catch(()=>{})});
