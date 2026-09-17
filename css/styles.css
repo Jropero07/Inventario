@@ -1007,3 +1007,11 @@ th {
   display: inline-grid;
   place-items: center;
 }
+
+
+/* Campos opcionales de consumibles */
+.optional-label {
+  font-size: 0.82em;
+  font-weight: 400;
+  color: var(--muted);
+}

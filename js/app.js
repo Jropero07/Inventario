@@ -98,6 +98,8 @@ function buildItemFromForm(formKind) {
     const codigo=sanitizeText($("cCodigo").value,LIMITS.codigo);
     const nombre=sanitizeText($("cNombre").value,LIMITS.nombre);
     const categoria=sanitizeText($("cCategoria").value,LIMITS.categoria);
+    const marca=sanitizeText($("cMarca").value,LIMITS.marca);
+    const modelo=sanitizeText($("cModelo").value,LIMITS.modelo);
     const unidad=sanitizeText($("cUnidad").value,LIMITS.unidad);
     const fechaIngreso=sanitizeText($("cFecha").value,20);
     const espacio=sanitizeText($("cEspacio").value,LIMITS.espacio);
@@ -108,7 +110,7 @@ function buildItemFromForm(formKind) {
     if(stock < 0 || minimo < 0) throw new Error("El stock actual y el stock mínimo no pueden ser negativos.");
 
     return normalizeItem({
-      tipo:"Consumible",codigo,nombre,categoria,unidad,fechaIngreso,espacio,
+      tipo:"Consumible",codigo,nombre,categoria,marca,modelo,unidad,fechaIngreso,espacio,
       stockActual:stock,stockMinimo:minimo,estado:"Disponible",createdAt:Date.now(),updatedAt:Date.now()
     });
   }
@@ -465,6 +467,8 @@ function editItem(item) {
     $("cCodigo").value=item.codigo;
     $("cNombre").value=item.nombre;
     $("cCategoria").value=item.categoria;
+    $("cMarca").value=item.marca;
+    $("cModelo").value=item.modelo;
     $("cUnidad").value=item.unidad;
     $("cFecha").value=item.fechaIngreso;
     $("cEspacio").value=item.espacio;
@@ -516,6 +520,8 @@ function duplicateItem(item) {
     $("cCodigo").value="";
     $("cNombre").value=item.nombre;
     $("cCategoria").value=item.categoria;
+    $("cMarca").value=item.marca;
+    $("cModelo").value=item.modelo;
     $("cUnidad").value=item.unidad;
     $("cFecha").value=item.fechaIngreso;
     $("cEspacio").value=item.espacio;
