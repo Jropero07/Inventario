@@ -679,57 +679,105 @@ function renderMovements() {
   $("movementCount").textContent=`${data.length} movimientos`;
 }
 
+function normalizeDateInputValue(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const match = raw.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  if (match) return `${match[3]}-${match[2].padStart(2,"0")}-${match[1].padStart(2,"0")}`;
+  const numeric = Number(raw);
+  const date = Number.isFinite(numeric) && numeric > 0 ? new Date(numeric) : new Date(raw);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
+}
+
+function setModalField(form, prefix, originalId, value) {
+  const field = form.querySelector(`[id="${prefix}${originalId}"]`);
+  if (!field) return;
+  field.value = value ?? "";
+}
+
 function cloneFormForEdit(item) {
   const sourceId=item.tipo==="Consumible" ? "consumableForm" : "assetForm";
-  const prefix=item.tipo==="Consumible" ? "editConsumable_" : "editAsset_";
+  const prefix="modal-";
   const source=$(sourceId);
   const form=source.cloneNode(true);
-  form.id=prefix+(item.tipo==="Consumible" ? "form" : "form");
+  form.id=`${prefix}${item.tipo==="Consumible" ? "consumable-form" : "asset-form"}`;
   form.dataset.editPrefix=prefix;
+  form.dataset.editType=item.tipo;
   form.classList.add("edit-modal-form");
   form.removeAttribute("novalidate");
 
-  form.querySelectorAll("[id]").forEach(el=>{
-    const oldId=el.id;
-    el.id=prefix+oldId;
-  });
-  form.querySelectorAll("label[for]").forEach(label=>label.htmlFor=prefix+label.htmlFor);
+  // El modal es un formulario independiente: todos sus controles reciben IDs propios.
+  form.querySelectorAll("[id]").forEach(el=>{el.id=prefix+el.id;});
+  form.querySelectorAll("label[for]").forEach(label=>{label.htmlFor=prefix+label.htmlFor;});
 
-  const editingId=prefix+(item.tipo==="Consumible" ? "cEditingId" : "editingId");
-  const hidden=$(editingId);
-  if(hidden) hidden.value=item.idFirebase;
+  const set=(id,value)=>setModalField(form,prefix,id,value);
+  const hiddenId=item.tipo==="Consumible" ? "cEditingId" : "editingId";
+  set(hiddenId,item.idFirebase);
 
   if(item.tipo==="Consumible") {
-    const set=(id,value)=>{const el=$(prefix+id);if(el)el.value=value??"";};
-    set("cCodigo",item.codigo); set("cNombre",item.nombre); set("cCategoria",item.categoria);
-    set("cMarca",item.marca); set("cModelo",item.modelo); set("cSerial",item.serial);
-    set("cUnidad",item.unidad); set("cFecha",item.fechaIngreso); set("cEspacio",item.espacio);
-    set("cStock",item.stockActual); set("cMinimo",item.stockMinimo); set("cPrioridadAlerta",item.prioridadAlerta||"Alta");
-    const save=$(prefix+"saveConsumableBtn");
+    set("cCodigo",item.codigo);
+    set("cNombre",item.nombre);
+    set("cCategoria",item.categoria);
+    set("cMarca",item.marca);
+    set("cModelo",item.modelo);
+    set("cSerial",item.serial);
+    set("cUnidad",item.unidad);
+    set("cFecha",normalizeDateInputValue(item.fechaIngreso));
+    set("cEspacio",item.espacio);
+    set("cStock",String(item.stockActual ?? 0));
+    set("cMinimo",String(item.stockMinimo ?? 0));
+    set("cPrioridadAlerta",item.prioridadAlerta || "Alta");
+
+    const save=form.querySelector(`[id="${prefix}saveConsumableBtn"]`);
     if(save) save.textContent="Guardar cambios";
-    const clear=$(prefix+"clearConsumableBtn");
+    const clear=form.querySelector(`[id="${prefix}clearConsumableBtn"]`);
     if(clear) clear.textContent="Cancelar";
-    const scan=$(prefix+"scanConsumableSerialBtn");
+    const scan=form.querySelector(`[id="${prefix}scanConsumableSerialBtn"]`);
     if(scan) scan.addEventListener("click",()=>startScanner(prefix+"cSerial",()=>validateSerialInputField(prefix+"cSerial",item.idFirebase)));
     form.addEventListener("submit",event=>submitEditModal(event,item,prefix));
     if(clear) clear.addEventListener("click",()=>closeEditModal(true));
     return {form,prefix};
   }
 
-  const set=(id,value)=>{const el=$(prefix+id);if(el)el.value=value??"";};
-  set("codigo",item.codigo); set("nombre",item.nombre); set("categoria",item.categoria);
-  set("marca",item.marca); set("modelo",item.modelo); set("serial",item.serial);
-  set("fechaIngreso",item.fechaIngreso); set("fechaAsignacion",item.fechaAsignacion);
-  set("estado",item.estado); set("espacio",item.espacio); set("responsable",item.responsable);
-  toggleLocationFieldsFor(prefix);
-  const save=$(prefix+"saveItemBtn");
+  set("codigo",item.codigo);
+  set("nombre",item.nombre);
+  set("categoria",item.categoria);
+  set("marca",item.marca);
+  set("modelo",item.modelo);
+  set("serial",item.serial);
+  set("fechaIngreso",normalizeDateInputValue(item.fechaIngreso));
+  set("fechaAsignacion",normalizeDateInputValue(item.fechaAsignacion));
+  set("estado",item.estado || "Disponible");
+  set("espacio",item.espacio);
+  set("responsable",item.responsable);
+
+  // La visibilidad/required también se resuelve dentro del formulario clonado.
+  const state=form.querySelector(`[id="${prefix}estado"]`);
+  const responsibleField=form.querySelector(`[id="${prefix}responsableField"]`);
+  const assignmentField=form.querySelector(`[id="${prefix}assignmentDateField"]`);
+  const responsible=form.querySelector(`[id="${prefix}responsable"]`);
+  const assignmentDate=form.querySelector(`[id="${prefix}fechaAsignacion"]`);
+  const syncAssignmentFields=()=>{
+    if(!state || !responsibleField || !assignmentField || !responsible || !assignmentDate) return;
+    const assigned=state.value==="Asignado";
+    responsibleField.classList.toggle("hidden",!assigned);
+    assignmentField.classList.toggle("hidden",!assigned);
+    responsible.required=assigned;
+    assignmentDate.required=assigned;
+    if(assigned && !assignmentDate.value) assignmentDate.value=new Date().toISOString().slice(0,10);
+    if(!assigned) assignmentDate.value="";
+  };
+  syncAssignmentFields();
+
+  const save=form.querySelector(`[id="${prefix}saveItemBtn"]`);
   if(save) save.innerHTML='<i class="fa-solid fa-floppy-disk" aria-hidden="true"></i><span>Guardar cambios</span>';
-  const clear=$(prefix+"cancelEditBtn");
+  const clear=form.querySelector(`[id="${prefix}cancelEditBtn"]`);
   if(clear) clear.innerHTML='<i class="fa-solid fa-xmark" aria-hidden="true"></i><span>Cancelar</span>';
-  const scan=$(prefix+"scanBtn");
+  const scan=form.querySelector(`[id="${prefix}scanBtn"]`);
   if(scan) scan.addEventListener("click",()=>startScanner(prefix+"codigo"));
-  const state=$(prefix+"estado");
-  if(state) state.addEventListener("change",()=>toggleLocationFieldsFor(prefix));
+  if(state) state.addEventListener("change",syncAssignmentFields);
   form.addEventListener("submit",event=>submitEditModal(event,item,prefix));
   if(clear) clear.addEventListener("click",()=>closeEditModal(true));
   return {form,prefix};
