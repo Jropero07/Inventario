@@ -64,6 +64,7 @@
           <div><h2>Gestión de Activos Fijos</h2><p>Registre equipos, periféricos y demás activos institucionales.</p></div>
         </div>
 
+        <div id="assetFormPlaceholder" class="form-modal-placeholder" hidden aria-hidden="true"></div>
         <form id="assetForm" class="card form-grid" novalidate>
           <input id="editingId" type="hidden">
           <input id="formType" type="hidden" value="Activo">
@@ -146,6 +147,7 @@
 
       <section id="consumibles" class="panel">
         <div class="panel-head"><div><h2>Gestión de Consumibles</h2><p>Controle existencias y niveles mínimos de alerta.</p></div></div>
+        <div id="consumableFormPlaceholder" class="form-modal-placeholder" hidden aria-hidden="true"></div>
         <form id="consumableForm" class="card form-grid" novalidate>
           <input id="cEditingId" type="hidden">
           <div class="field code-field"><label for="cCodigo">Código / SKU</label><div class="inline-controls"><input id="cCodigo" maxlength="80" autocomplete="off" required><button id="generateConsumableSkuBtn" type="button" class="btn secondary">Generar SKU</button></div></div>
@@ -209,6 +211,13 @@
         </div><p id="movementCount" class="table-note">0 movimientos</p></div>
       </section>
     </main>
+  </div>
+
+  <div id="editModal" class="modal-backdrop" hidden aria-hidden="true">
+    <div class="modal edit-modal" role="dialog" aria-modal="true" aria-labelledby="editModalTitle">
+      <div class="modal-head"><h3 id="editModalTitle">Editar artículo</h3><button id="closeEditModalBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
+      <div id="editModalBody" class="edit-modal-body"></div>
+    </div>
   </div>
 
   <div id="scannerModal" class="modal-backdrop" hidden aria-hidden="true">

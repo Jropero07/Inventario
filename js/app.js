@@ -32,6 +32,8 @@ const selectedAlertIds = new Set();
 let orderQuantities = new Map();
 let transferItem = null;
 let pendingDeleteId = null;
+let editModalContext = null;
+let editModalFormKind = "";
 
 const LIMITS = { codigo:80, nombre:140, categoria:80, marca:80, modelo:100, serial:100, espacio:120, responsable:120, unidad:40 };
 
@@ -676,19 +678,11 @@ function renderMovements() {
   $("movementCount").textContent=`${data.length} movimientos`;
 }
 
-function editItem(item) {
+function populateEditForm(item) {
   if(item.tipo==="Consumible") {
     assetEditingId="";
     $("editingId").value="";
     consumableEditingId=item.idFirebase;
-  } else {
-    consumableEditingId="";
-    $("cEditingId").value="";
-    assetEditingId=item.idFirebase;
-  }
-  activateTab(item.tipo==="Consumible"?"consumibles":"activos");
-
-  if(item.tipo==="Consumible"){
     $("cEditingId").value=item.idFirebase;
     $("cCodigo").value=item.codigo;
     $("cNombre").value=item.nombre;
@@ -702,10 +696,12 @@ function editItem(item) {
     $("cStock").value=item.stockActual;
     $("cMinimo").value=item.stockMinimo;
     $("cPrioridadAlerta").value=item.prioridadAlerta || "Alta";
-    showToast("Editando consumible.");
     return;
   }
 
+  consumableEditingId="";
+  $("cEditingId").value="";
+  assetEditingId=item.idFirebase;
   $("editingId").value=item.idFirebase;
   $("codigo").value=item.codigo;
   $("nombre").value=item.nombre;
@@ -720,7 +716,62 @@ function editItem(item) {
   $("responsable").value=item.responsable;
   toggleLocationFields();
   $("saveItemBtn").textContent="Guardar cambios";
-  showToast("Editando activo.");
+}
+
+function openEditModal(item) {
+  if(!item || !item.idFirebase) return;
+  if(!$("editModal").hidden) closeEditModal(false);
+  editModalContext={
+    scrollY:window.scrollY,
+    activeTab:document.querySelector(".panel.active")?.id || (item.tipo==="Consumible"?"consumibles":"activos")
+  };
+  editModalFormKind=item.tipo;
+  populateEditForm(item);
+  const form=item.tipo==="Consumible" ? $("consumableForm") : $("assetForm");
+  const placeholder=item.tipo==="Consumible" ? $("consumableFormPlaceholder") : $("assetFormPlaceholder");
+  if(form && placeholder) {
+    placeholder.hidden=false;
+    placeholder.setAttribute("aria-hidden","false");
+    placeholder.parentNode.insertBefore(form,placeholder);
+  }
+  $("editModalTitle").textContent=`Editar ${item.tipo.toLowerCase()}`;
+  $("editModalBody").appendChild(form);
+  $("editModal").hidden=false;
+  $("editModal").setAttribute("aria-hidden","false");
+  requestAnimationFrame(()=>{
+    const first=form.querySelector("input:not([type=hidden]), select, textarea");
+    if(first) first.focus({preventScroll:true});
+  });
+}
+
+function restoreEditForm() {
+  if(!editModalFormKind) return;
+  const form=editModalFormKind==="Consumible" ? $("consumableForm") : $("assetForm");
+  const placeholder=editModalFormKind==="Consumible" ? $("consumableFormPlaceholder") : $("assetFormPlaceholder");
+  if(form && placeholder && placeholder.parentNode) placeholder.parentNode.insertBefore(form,placeholder.nextSibling);
+  if(placeholder){ placeholder.hidden=true; placeholder.setAttribute("aria-hidden","true"); }
+  editModalFormKind="";
+}
+
+function closeEditModal(restore=true) {
+  if($("editModal").hidden) return;
+  restoreEditForm();
+  $("editModal").hidden=true;
+  $("editModal").setAttribute("aria-hidden","true");
+  if(restore && editModalContext){
+    const y=editModalContext.scrollY;
+    requestAnimationFrame(()=>requestAnimationFrame(()=>window.scrollTo({top:y,left:0,behavior:"auto"})));
+  }
+  editModalContext=null;
+}
+
+function finishEditModalAfterSave() {
+  if($("editModal").hidden) return;
+  closeEditModal(true);
+}
+
+function editItem(item) {
+  openEditModal(item);
 }
 function clearAssetForm(){
   $("assetForm").reset();
@@ -1249,8 +1300,9 @@ $("scanSerialBtn").addEventListener("click",()=>startScanner("serial",()=>valida
 $("scanConsumableSerialBtn").addEventListener("click",()=>startScanner("cSerial",()=>validateConsumableSerialField(consumableEditingId || $("cEditingId").value || "")));
 $("transferModal").addEventListener("click",e=>{if(e.target===$("transferModal"))closeTransferModal()});$("closeTransferBtn").addEventListener("click",closeTransferModal);$("cancelTransferBtn").addEventListener("click",closeTransferModal);$("transferForm").addEventListener("submit",submitTransfer);
 $("deleteConfirmModal").addEventListener("click",e=>{if(e.target===$("deleteConfirmModal"))closeDeleteConfirm()});$("closeDeleteConfirmBtn").addEventListener("click",closeDeleteConfirm);$("cancelDeleteConfirmBtn").addEventListener("click",closeDeleteConfirm);$("confirmDeleteBtn").addEventListener("click",confirmDeleteItem);
+$("editModal").addEventListener("click",e=>{if(e.target===$("editModal"))closeEditModal(true)});$("closeEditModalBtn").addEventListener("click",()=>closeEditModal(true));
 $("bulkImportInput").addEventListener("change",e=>importBulkFile(e.target.files[0]));
-document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("scannerModal").hidden)stopScanner();if(!$("qrModal").hidden)closeQrModal();if(!$("orderModal").hidden)closeOrder();if(!$("movementModal").hidden)closeMovementModal();if(!$("transferModal").hidden)closeTransferModal();if(!$("deleteConfirmModal").hidden)closeDeleteConfirm()}});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("scannerModal").hidden)stopScanner();if(!$("qrModal").hidden)closeQrModal();if(!$("orderModal").hidden)closeOrder();if(!$("movementModal").hidden)closeMovementModal();if(!$("transferModal").hidden)closeTransferModal();if(!$("deleteConfirmModal").hidden)closeDeleteConfirm();if(!$("editModal").hidden)closeEditModal(true)}});
 $("assetForm").addEventListener("submit",async e=>{
   e.preventDefault();
   if(isFormCompletelyBlank("assetForm")){showToast("Todos los campos están vacíos",true);return;}
@@ -1267,6 +1319,7 @@ $("assetForm").addEventListener("submit",async e=>{
     }
     await guardarItemFirebase(item,id);
     clearAssetForm();
+    if(id) finishEditModalAfterSave();
     showToast(id?"Cambios guardados correctamente.":"Activo registrado.");
   } catch(err) {
     showToast(err.message||"No se pudo guardar.",true);
@@ -1291,6 +1344,7 @@ $("consumableForm").addEventListener("submit",async e=>{
     $("consumableForm").reset();
     $("cEditingId").value="";
     consumableEditingId="";
+    if(id) finishEditModalAfterSave();
     showToast(id?"Cambios guardados correctamente.":"Consumible registrado.");
   } catch(err) {
     showToast(err.message||"No se pudo guardar.",true);
