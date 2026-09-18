@@ -27,6 +27,10 @@ let orderCounter = 1;
 let currentOrderFolio = "";
 let pendingMovement = null;
 let qrItem = null;
+let alertFilter = "all";
+const selectedAlertIds = new Set();
+let orderQuantities = new Map();
+let transferItem = null;
 
 const LIMITS = { codigo:80, nombre:140, categoria:80, marca:80, modelo:100, serial:100, espacio:120, responsable:120, unidad:40 };
 
@@ -72,6 +76,7 @@ function normalizeItem(raw) {
     unidad: sanitizeText(raw.unidad, LIMITS.unidad),
     stockActual: Number.isSafeInteger(raw.stockActual) && raw.stockActual >= 0 ? raw.stockActual : 0,
     stockMinimo: Number.isSafeInteger(raw.stockMinimo) && raw.stockMinimo >= 0 ? raw.stockMinimo : 0,
+    prioridadAlerta: raw.prioridadAlerta === "Baja" ? "Baja" : "Alta",
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
     updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : Date.now()
   };
@@ -100,18 +105,20 @@ function buildItemFromForm(formKind) {
     const categoria=sanitizeText($("cCategoria").value,LIMITS.categoria);
     const marca=sanitizeText($("cMarca").value,LIMITS.marca);
     const modelo=sanitizeText($("cModelo").value,LIMITS.modelo);
+    const serial=sanitizeText($("cSerial").value,LIMITS.serial);
     const unidad=sanitizeText($("cUnidad").value,LIMITS.unidad);
     const fechaIngreso=sanitizeText($("cFecha").value,20);
     const espacio=sanitizeText($("cEspacio").value,LIMITS.espacio);
+    const prioridadAlerta=$("cPrioridadAlerta").value === "Baja" ? "Baja" : "Alta";
 
-    if(!codigo || !nombre || !categoria || !unidad || !fechaIngreso || !espacio || stock===null || minimo===null){
+    if(!codigo || !nombre || !categoria || !espacio || stock===null || minimo===null){
       throw new Error("Todos los campos son obligatorios para guardar un consumible.");
     }
     if(stock < 0 || minimo < 0) throw new Error("El stock actual y el stock mínimo no pueden ser negativos.");
 
     return normalizeItem({
-      tipo:"Consumible",codigo,nombre,categoria,marca,modelo,unidad,fechaIngreso,espacio,
-      stockActual:stock,stockMinimo:minimo,estado:"Disponible",createdAt:Date.now(),updatedAt:Date.now()
+      tipo:"Consumible",codigo,nombre,categoria,marca,modelo,serial,unidad,fechaIngreso,espacio,
+      stockActual:stock,stockMinimo:minimo,prioridadAlerta,estado:"Disponible",createdAt:Date.now(),updatedAt:Date.now()
     });
   }
 
@@ -127,7 +134,7 @@ function buildItemFromForm(formKind) {
   const fechaAsignacion=estado==="Asignado" ? sanitizeText($("fechaAsignacion").value,20) : "";
   const responsable=estado==="Asignado" ? sanitizeText($("responsable").value,LIMITS.responsable) : "";
 
-  if(!codigo || !nombre || !categoria || !marca || !modelo || !fechaIngreso || !espacio){
+  if(!codigo || !nombre || !categoria || !marca || !modelo || !estado || !espacio){
     throw new Error("Complete todos los campos obligatorios del activo. El número de serie es opcional.");
   }
   if(estado==="Asignado" && !responsable) throw new Error("Indique la persona responsable del activo.");
@@ -138,6 +145,58 @@ function buildItemFromForm(formKind) {
     fechaIngreso,fechaAsignacion,estado,espacio,responsable,
     stockActual:0,stockMinimo:0,createdAt:Date.now(),updatedAt:Date.now()
   });
+}
+
+function normalizedKey(value) {
+  return sanitizeText(value, 160).trim().toUpperCase();
+}
+
+function validateUniqueCode(code, editingId="") {
+  const key=normalizedKey(code);
+  if(!key) return true;
+  return !inventario.some(item=>item.idFirebase!==editingId && normalizedKey(item.codigo)===key);
+}
+
+function findDuplicateSerial(serial, editingId="") {
+  const key=normalizedKey(serial);
+  if(!key) return null;
+  return inventario.find(item=>item.idFirebase!==editingId && normalizedKey(item.serial)===key) || null;
+}
+
+let serialValidationTimer = null;
+let consumableSerialValidationTimer = null;
+
+async function validateSerialInputField(fieldId, editingId="") {
+  const field=$(fieldId);
+  if(!field) return true;
+  const serial=sanitizeText(field.value,LIMITS.serial);
+  field.setCustomValidity("");
+  if(!serial) { field.title=""; return true; }
+  const duplicate=findDuplicateSerial(serial,editingId);
+  if(duplicate){
+    field.setCustomValidity(`El número de serie ya existe en "${duplicate.nombre || "otro registro"}".`);
+    field.title=`Serial duplicado: ${duplicate.nombre || "otro registro"}`;
+    return false;
+  }
+  field.title="";
+  return true;
+}
+
+async function validateSerialField(editingId="") {
+  return validateSerialInputField("serial",editingId);
+}
+
+async function validateConsumableSerialField(editingId="") {
+  return validateSerialInputField("cSerial",editingId);
+}
+
+function validateCurrentCode(code, editingId="") {
+  const key=normalizedKey(code);
+  if(!key) return true;
+  if(!validateUniqueCode(code,editingId)){
+    throw new Error("El Código / SKU ya existe. Utilice un código único.");
+  }
+  return true;
 }
 
 async function registrarMovimiento(item, tipoAccion, cantidad=0, espacioDestino="") {
@@ -322,7 +381,7 @@ function renderizarInventario(items) {
   inventario=items.map(normalizeItem);
   setSync("Sincronizado en tiempo real","ok");
   renderSummary();
-  renderInventoryTable(); renderGeneralInventoryTable(); renderFilters(); renderCriticals();
+  renderInventoryTable(); renderGeneralInventoryTable(); renderFilters(); renderCriticals(); renderAnalytics();
 }
 window.renderizarInventario=renderizarInventario;
 
@@ -346,7 +405,11 @@ function filteredInventory() {
 
 function renderTableRow(item) {
   const tr=document.createElement("tr");
-  addCell(tr,item.tipo); addCell(tr,item.codigo); addCell(tr,item.nombre); addCell(tr,item.categoria); addCell(tr,item.estado);
+  addCell(tr,item.tipo); addCell(tr,item.codigo);
+  const nameTd=document.createElement("td");
+  nameTd.append(makeEl("div",item.nombre),movementBadge(item));
+  tr.appendChild(nameTd);
+  addCell(tr,item.categoria); addCell(tr,item.estado);
   addCell(tr,displayLocation(item)); addCell(tr,item.responsable);
   const stockTd=document.createElement("td");
   if(item.tipo==="Consumible") {
@@ -361,6 +424,7 @@ function renderTableRow(item) {
   act.append(button("fa-pen-to-square","Editar","edit",()=>editItem(item)));
   act.append(button("fa-copy","Copiar","copy",()=>duplicateItem(item),"Duplicar registro"));
   act.append(button("fa-qrcode","QR","qr",()=>openQrModal(item),"Generar código QR"));
+  act.append(button("fa-location-arrow","Traslado","transfer",()=>openTransferModal(item),"Traslado Express"));
   act.append(button("fa-trash","Eliminar","delete",async()=>{
     if(confirm(`¿Eliminar "${item.nombre}"?`)){
       try{await eliminarItemFirebase(item.idFirebase)}catch(e){showToast("No se pudo eliminar.",true)}
@@ -405,13 +469,129 @@ function renderFilters() {
   spaceSelect.value=spaces.includes(currentSpace)?currentSpace:"";
 }
 
-function renderCriticals() {
-  const critical=inventario.filter(i=>i.tipo==="Consumible" && i.stockActual<=i.stockMinimo);
-  $("criticalBadge").textContent=String(critical.length);
-  const box=$("criticalList"); box.replaceChildren();
-  if(!critical.length){box.appendChild(makeEl("p","No hay consumibles en nivel crítico.","muted"));return}
-  critical.forEach(i=>{const card=document.createElement("article");card.className="critical-item";card.append(makeEl("h3",i.nombre),makeEl("p",`Código: ${i.codigo}`),makeEl("p",`Stock actual: ${i.stockActual}`,"critical-number"),makeEl("p",`Stock mínimo: ${i.stockMinimo}`));box.appendChild(card)});
+function alertLevel(item) {
+  if(item.tipo!=="Consumible") return "";
+  const stock=safeInt(item.stockActual);
+  const minimo=safeInt(item.stockMinimo);
+  if(stock===null || minimo===null) return "";
+  if(stock<=minimo) return "critical";
+  const prioridad=item.prioridadAlerta === "Baja" ? "Baja" : "Alta";
+  if(prioridad === "Alta" && minimo>=3 && (stock===minimo+2 || stock===minimo+3)) return "preventive";
+  return "";
 }
+
+function filteredAlerts() {
+  const alerts=inventario.filter(item=>alertLevel(item));
+  if(alertFilter==="critical") return alerts.filter(item=>alertLevel(item)==="critical");
+  if(alertFilter==="preventive") return alerts.filter(item=>alertLevel(item)==="preventive");
+  return alerts;
+}
+
+function renderCriticals() {
+  const allAlerts=inventario.filter(i=>alertLevel(i));
+  const alertIds=new Set(allAlerts.map(i=>i.idFirebase));
+  [...selectedAlertIds].forEach(id=>{ if(!alertIds.has(id)) selectedAlertIds.delete(id); });
+  const critical=allAlerts.filter(i=>alertLevel(i)==="critical");
+  const preventive=allAlerts.filter(i=>alertLevel(i)==="preventive");
+  $("criticalBadge").textContent=String(critical.length);
+  document.querySelectorAll(".alert-filter").forEach(btn=>btn.classList.toggle("active",btn.dataset.alertFilter===alertFilter));
+  const box=$("criticalList"); box.replaceChildren();
+  const visible=filteredAlerts().sort((a,b)=>{
+    const levelOrder={critical:0,preventive:1};
+    return (levelOrder[alertLevel(a)]-levelOrder[alertLevel(b)]) || sortInventory(a,b);
+  });
+  if(!visible.length){
+    box.appendChild(makeEl("p",alertFilter==="critical"?"No hay consumibles en nivel crítico.":alertFilter==="preventive"?"No hay consumibles en nivel preventivo.":"No hay consumibles en alerta.","muted"));
+    return;
+  }
+  visible.forEach(item=>{
+    const level=alertLevel(item);
+    const card=document.createElement("article");
+    card.className=`critical-item ${level}`;
+    const badge=makeEl("span",level==="critical"?"CRÍTICO":"PREVENTIVO","alert-status-badge");
+    const head=document.createElement("div"); head.className="critical-card-head";
+    const selection=document.createElement("label"); selection.className="alert-selection";
+    const checkbox=document.createElement("input"); checkbox.type="checkbox"; checkbox.checked=selectedAlertIds.has(item.idFirebase); checkbox.setAttribute("aria-label",`Seleccionar ${item.nombre} para la Orden de Requerimiento`);
+    checkbox.addEventListener("change",()=>{
+      if(checkbox.checked) selectedAlertIds.add(item.idFirebase); else selectedAlertIds.delete(item.idFirebase);
+      if(!$('orderModal').hidden) buildOrderDocument();
+    });
+    selection.append(checkbox,makeEl("span","Solicitar"));
+    const title=makeEl("h3",item.nombre); head.append(title,badge,selection);
+    card.append(head,makeEl("p",`Código: ${item.codigo}`),makeEl("p",`Stock actual: ${item.stockActual}`,"critical-number"),makeEl("p",`Stock mínimo: ${item.stockMinimo}`),makeEl("p",`Prioridad: ${item.prioridadAlerta || "Alta"}`));
+    const action=document.createElement("div"); action.className="critical-card-actions";
+    const entry=button("fa-plus","Entrada de Stock","plus",()=>openMovementModal(item.idFirebase,1),"Registrar entrada de stock");
+    action.appendChild(entry); card.appendChild(action);
+    box.appendChild(card);
+  });
+}
+
+function latestMovementForItem(item) {
+  const code=normalizedKey(item.codigo);
+  const serial=normalizedKey(item.serial);
+  let latest=0;
+  for(const m of movimientos){
+    if(normalizedKey(m.codigo)!==code) continue;
+    if(serial && normalizedKey(m.serial) && normalizedKey(m.serial)!==serial) continue;
+    latest=Math.max(latest,Number(m.fechaHora)||0);
+  }
+  return Math.max(latest,Number(item.updatedAt)||0);
+}
+
+function movementBadge(item) {
+  const ts=latestMovementForItem(item);
+  if(!ts) return makeEl("span","Sin movimiento","activity-badge none");
+  const ageDays=Math.max(0,Math.floor((Date.now()-ts)/86400000));
+  if(ageDays===0) return makeEl("span","Modificado Hoy","activity-badge today");
+  if(ageDays>180) return makeEl("span","Sin movimiento >6 meses","activity-badge old");
+  return makeEl("span",`Hace ${ageDays} día${ageDays===1?"":"s"}`,"activity-badge recent");
+}
+
+function renderAnalytics() {
+  const consumables=inventario.filter(i=>i.tipo==="Consumible");
+  const exits=movimientos.filter(m=>m.tipo==="Consumible" && /^Salida/.test(String(m.tipoAccion||"")));
+  const itemTotals=new Map(), spaceTotals=new Map(), pairTotals=new Map();
+  const ninetyDaysAgo=Date.now()-90*86400000;
+  const recentItemTotals=new Map();
+  for(const m of exits){
+    const qty=Math.max(0,Number(m.cantidad)||0); if(!qty) continue;
+    const itemName=sanitizeText(m.nombre,140)||"Sin nombre";
+    const space=sanitizeText(m.espacioDestino,120)||"Sin destino registrado";
+    itemTotals.set(itemName,(itemTotals.get(itemName)||0)+qty);
+    spaceTotals.set(space,(spaceTotals.get(space)||0)+qty);
+    const pairKey=`${space}||${itemName}`;
+    const pair=pairTotals.get(pairKey)||{space,item:itemName,qty:0}; pair.qty+=qty; pairTotals.set(pairKey,pair);
+    if((Number(m.fechaHora)||0)>=ninetyDaysAgo) recentItemTotals.set(itemName,(recentItemTotals.get(itemName)||0)+qty);
+  }
+  const topItem=[...itemTotals.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],"es"))[0];
+  const topSpace=[...spaceTotals.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],"es"))[0];
+  const topPair=[...pairTotals.values()].sort((a,b)=>b.qty-a.qty||a.item.localeCompare(b.item,"es"))[0];
+  $("analyticsTopItem").textContent=topItem?topItem[0]:"—";
+  $("analyticsTopItemDetail").textContent=topItem?`${topItem[1]} unidades salidas`:"Sin salidas registradas";
+  $("analyticsTopSpace").textContent=topSpace?topSpace[0]:"—";
+  $("analyticsTopSpaceDetail").textContent=topSpace?`${topSpace[1]} unidades demandadas`:"Sin demanda registrada";
+  $("analyticsTopPair").textContent=topPair?`${topPair.space} → ${topPair.item}`:"—";
+  $("analyticsTopPairDetail").textContent=topPair?`${topPair.qty} unidades`:"Sin relación registrada";
+
+  const rotation=[...consumables].map(item=>({item,total:recentItemTotals.get(item.nombre)||0})).sort((a,b)=>b.total-a.total||a.item.nombre.localeCompare(b.item.nombre,"es"));
+  const high=rotation.filter(x=>x.total>=5).length, medium=rotation.filter(x=>x.total>=2&&x.total<5).length, low=rotation.filter(x=>x.total<2).length;
+  $("analyticsRotationSummary").textContent=rotation.length?`${high} alta · ${medium} media · ${low} baja`:"—";
+  $("analyticsRotationDetail").textContent="Clasificación según salidas acumuladas en los últimos 90 días (≥5 alta, 2–4 media, 0–1 baja).";
+
+  const topSpaces=[...spaceTotals.entries()].sort((a,b)=>b[1]-a[1]).slice(0,3);
+  const list=$("analyticsTopSpacesList"); list.replaceChildren();
+  if(!topSpaces.length) list.appendChild(makeEl("li","Sin salidas registradas.","muted"));
+  else topSpaces.forEach(([space,qty])=>{const li=document.createElement("li");li.append(makeEl("strong",space),makeEl("span",`${qty} unidades`));list.appendChild(li);});
+
+  const rotList=$("analyticsRotationList"); rotList.replaceChildren();
+  if(!rotation.length) rotList.appendChild(makeEl("span","Sin consumibles registrados.","muted"));
+  rotation.slice(0,8).forEach(({item,total})=>{
+    const level=total>=5?"Alta":total>=2?"Media":"Baja";
+    const row=document.createElement("div"); row.className="rotation-row";
+    row.append(makeEl("span",item.nombre),makeEl("strong",`${level} · ${total} salidas`)); rotList.appendChild(row);
+  });
+}
+
 function movementActionCategory(m) {
   const action=String(m.tipoAccion||"");
   if(/^Entrada/.test(action)) return "Entrada";
@@ -469,11 +649,13 @@ function editItem(item) {
     $("cCategoria").value=item.categoria;
     $("cMarca").value=item.marca;
     $("cModelo").value=item.modelo;
+    $("cSerial").value=item.serial;
     $("cUnidad").value=item.unidad;
     $("cFecha").value=item.fechaIngreso;
     $("cEspacio").value=item.espacio;
     $("cStock").value=item.stockActual;
     $("cMinimo").value=item.stockMinimo;
+    $("cPrioridadAlerta").value=item.prioridadAlerta || "Alta";
     showToast("Editando consumible.");
     return;
   }
@@ -522,11 +704,13 @@ function duplicateItem(item) {
     $("cCategoria").value=item.categoria;
     $("cMarca").value=item.marca;
     $("cModelo").value=item.modelo;
+    $("cSerial").value="";
     $("cUnidad").value=item.unidad;
     $("cFecha").value=item.fechaIngreso;
     $("cEspacio").value=item.espacio;
     $("cStock").value="0";
     $("cMinimo").value=String(item.stockMinimo);
+    $("cPrioridadAlerta").value=item.prioridadAlerta || "Alta";
     showToast("Copia preparada. Escriba un nuevo código.");
     return;
   }
@@ -549,8 +733,11 @@ function duplicateItem(item) {
   showToast("Registro copiado. Código y serial quedaron vacíos.");
 }
 
-function nextAvailableSku(prefix){
-  const used=new Set(inventario.map(i=>String(i.codigo||"").trim().toUpperCase()).filter(Boolean));
+function nextAvailableSku(tipo, categoria){
+  const typePrefix=tipo==="Consumible"?"CON":"ACT";
+  const catPrefix=categoryPrefix(categoria,"GEN");
+  const prefix=`${typePrefix}-${catPrefix}`;
+  const used=new Set(inventario.map(i=>normalizedKey(i.codigo)).filter(Boolean));
   let n=1;
   while(used.has(`${prefix}-${String(n).padStart(3,"0")}`)) n++;
   return `${prefix}-${String(n).padStart(3,"0")}`;
@@ -564,17 +751,19 @@ function categoryPrefix(value,fallback="GEN"){
     JACKS:"JACK", JACK:"JACK", CABLES:"CAB", CABLE:"CAB", CONECTORES:"CON",
     ADAPTADORES:"ADAP", ADAPTADOR:"ADAP", ACCESORIOS:"ACC"
   };
-  return aliases[cat] || cat.replace(/[^A-Z0-9]/g,"").slice(0,4) || fallback;
+  return aliases[cat] || cat.normalize("NFD").replace(/[\\u0300-\\u036f]/g,"").replace(/[^A-Z0-9]/g,"").slice(0,8) || fallback;
 }
 
 function generateSku(){
-  const prefix=categoryPrefix($("categoria").value,"ACT");
-  $("codigo").value=nextAvailableSku(prefix);
+  const category=sanitizeText($("categoria").value,LIMITS.categoria);
+  if(!category){showToast("Indique la categoría antes de generar el SKU.",true); $("categoria").focus(); return;}
+  $("codigo").value=nextAvailableSku("Activo",category);
 }
 
 function generateConsumableSku(){
-  const prefix=categoryPrefix($("cCategoria").value,"CON");
-  $("cCodigo").value=nextAvailableSku(prefix);
+  const category=sanitizeText($("cCategoria").value,LIMITS.categoria);
+  if(!category){showToast("Indique la categoría antes de generar el SKU.",true); $("cCategoria").focus(); return;}
+  $("cCodigo").value=nextAvailableSku("Consumible",category);
 }
 
 function beep() {
@@ -670,6 +859,40 @@ async function stopScanner() {
   }
 }
 
+function openTransferModal(item){
+  transferItem=item;
+  $("transferItemName").textContent=item.nombre || "Artículo";
+  $("transferItemLocation").textContent=`Ubicación actual: ${displayLocation(item)}`;
+  $("transferDestination").value=item.espacio || "";
+  $("transferModal").hidden=false;
+  $("transferModal").setAttribute("aria-hidden","false");
+  setTimeout(()=>$("transferDestination").focus(),50);
+}
+
+function closeTransferModal(){
+  transferItem=null;
+  $("transferModal").hidden=true;
+  $("transferModal").setAttribute("aria-hidden","true");
+}
+
+async function submitTransfer(event){
+  event.preventDefault();
+  if(!transferItem) return;
+  const destination=sanitizeText($("transferDestination").value,LIMITS.espacio);
+  if(!destination){showToast("Indique el nuevo espacio o ubicación.",true);return;}
+  const id=transferItem.idFirebase;
+  try{
+    const itemRef=ref(db,`inventario/${id}`);
+    await update(itemRef,{espacio:destination,updatedAt:Date.now()});
+    await registrarMovimiento({...transferItem,espacio:destination},"Edición",0,destination);
+    closeTransferModal();
+    showToast(`Ubicación cambiada a ${destination}`);
+  }catch(error){
+    console.error("Error en Traslado Express:",error);
+    showToast("No se pudo cambiar la ubicación. Revise las reglas de Firebase.",true);
+  }
+}
+
 function getQrValue(item) {
   const sku=sanitizeText(item.codigo,LIMITS.codigo);
   const serial=sanitizeText(item.serial,LIMITS.serial);
@@ -740,16 +963,27 @@ function getOrderMeta(){
     solicitadoA:sanitizeText($("orderSolicitadoA").value,120),
     area:sanitizeText($("orderArea").value,120),
     prioridad:sanitizeText($("orderPriority").value,40),
-    estado:sanitizeText($("orderStatus").value,40)
+    justificacion:sanitizeText($("orderJustification").value,500)
   };
 }
 
+function suggestedOrderQuantity(item){
+  return Math.max(1,item.stockMinimo-item.stockActual+1);
+}
+
+function getOrderItems(){
+  return inventario.filter(item=>selectedAlertIds.has(item.idFirebase) && alertLevel(item)).sort((a,b)=>{
+    const levelOrder={critical:0,preventive:1};
+    return (levelOrder[alertLevel(a)]-levelOrder[alertLevel(b)]) || sortInventory(a,b);
+  });
+}
+
 function buildOrderDocument() {
-  const critical=inventario.filter(i=>i.tipo==="Consumible"&&i.stockActual<=i.stockMinimo)
-    .sort(sortInventory);
+  const items=getOrderItems();
   const meta=getOrderMeta();
   const root=$("orderDocument"); root.replaceChildren();
   if(!currentOrderFolio) currentOrderFolio=`REQ-${new Date().getFullYear()}-${String(orderCounter++).padStart(4,"0")}`;
+  for(const item of items){ if(!orderQuantities.has(item.idFirebase)) orderQuantities.set(item.idFirebase,suggestedOrderQuantity(item)); }
 
   const header=document.createElement("div"); header.className="order-header";
   const left=document.createElement("div"); left.className="order-title";
@@ -759,7 +993,7 @@ function buildOrderDocument() {
   header.append(left,right); root.appendChild(header);
 
   const data=document.createElement("div"); data.className="order-data";
-  [["Solicitante",meta.solicitante||"—"],["Solicitado a",meta.solicitadoA||"—"],["Área / Departamento",meta.area||"—"],["Nivel de Prioridad",meta.prioridad||"—"],["Estado",meta.estado||"—"]]
+  [["Solicitante",meta.solicitante||"—"],["Solicitado a",meta.solicitadoA||"—"],["Área / Departamento",meta.area||"—"],["Nivel de Prioridad",meta.prioridad||"—"]]
     .forEach(([a,b])=>{const x=document.createElement("div");x.className="order-box";x.append(makeEl("strong",a),document.createElement("br"),makeEl("span",b));data.appendChild(x)});
   root.appendChild(data);
 
@@ -768,30 +1002,33 @@ function buildOrderDocument() {
   ["N°","Descripción / Material","Stock Actual","Stock Mínimo","Cantidad a Solicitar"].forEach(h=>hr.appendChild(makeEl("th",h)));
   thead.appendChild(hr); table.appendChild(thead);
   const tbody=document.createElement("tbody");
-  critical.forEach((i,n)=>{
+  items.forEach((item,n)=>{
     const tr=document.createElement("tr");
-    [String(n+1),i.nombre,String(i.stockActual),String(i.stockMinimo),String(Math.max(1,i.stockMinimo-i.stockActual+1))]
-      .forEach((v,k)=>addCell(tr,v,k===2?"danger-cell":""));
-    tbody.appendChild(tr);
+    addCell(tr,String(n+1)); addCell(tr,item.nombre); addCell(tr,String(item.stockActual),"danger-cell"); addCell(tr,String(item.stockMinimo));
+    const qtyTd=document.createElement("td");
+    const input=document.createElement("input"); input.type="number"; input.min="1"; input.step="1"; input.inputMode="numeric"; input.className="order-quantity"; input.value=String(orderQuantities.get(item.idFirebase)||suggestedOrderQuantity(item)); input.dataset.itemId=item.idFirebase; input.setAttribute("aria-label",`Cantidad a solicitar para ${item.nombre}`);
+    input.addEventListener("input",()=>{const q=safeInt(input.value);if(q!==null&&q>=1)orderQuantities.set(item.idFirebase,q);});
+    qtyTd.appendChild(input); tr.appendChild(qtyTd); tbody.appendChild(tr);
   });
+  if(!items.length){const tr=document.createElement("tr");const td=makeEl("td","No hay ítems para el filtro de urgencia seleccionado.");td.colSpan=5;tr.appendChild(td);tbody.appendChild(tr);}
   table.appendChild(tbody); root.appendChild(table);
 
   const just=document.createElement("div"); just.className="justification";
-  just.append(makeEl("strong","Justificación"),makeEl("p",critical.length?"Reposición de consumibles que se encuentran en nivel crítico o por debajo del mínimo establecido.":"No existen consumibles críticos."));
-  root.appendChild(just);
+  just.append(makeEl("strong","Justificación / Motivo del Pedido"),makeEl("p",meta.justificacion||"—")); root.appendChild(just);
   const signs=document.createElement("div"); signs.className="signatures";
   [meta.solicitante?`Solicitado Por: ${meta.solicitante}`:"Solicitado Por",meta.solicitadoA?`Solicitado A: ${meta.solicitadoA}`:"Aprobado Por"]
-    .forEach(s=>signs.appendChild(makeEl("div",s,"signature")));
+    .forEach(x=>signs.appendChild(makeEl("div",x,"signature")));
   root.appendChild(signs);
 }
 
 function openOrder(){
   currentOrderFolio="";
+  orderQuantities=new Map();
   $("orderSolicitante").value="";
   $("orderSolicitadoA").value="";
   $("orderArea").value="";
-  $("orderPriority").value=inventario.some(i=>i.tipo==="Consumible"&&i.stockActual<=i.stockMinimo)?"Alta":"Normal";
-  $("orderStatus").value="Pendiente";
+  $("orderPriority").value=inventario.some(i=>alertLevel(i)==="critical")?"Alta":"Normal";
+  $("orderJustification").value="";
   buildOrderDocument();
   $("orderModal").hidden=false;
   $("orderModal").setAttribute("aria-hidden","false");
@@ -813,6 +1050,7 @@ function exportRows(){
     Unidad:i.unidad,
     Stock:i.tipo==="Consumible"?i.stockActual:"",
     "Stock Mínimo":i.tipo==="Consumible"?i.stockMinimo:"",
+    "Prioridad de Alerta":i.tipo==="Consumible"?i.prioridadAlerta:"",
     "Fecha de Ingreso":i.fechaIngreso,
     "Fecha de Asignación":i.fechaAsignacion
   }));
@@ -835,7 +1073,7 @@ function exportPdf(){
   const subtitle=makeEl("p",`Exportado: ${new Date().toLocaleString("es-CO")} · ${rows.length} registros`); subtitle.style.margin="0 0 14px"; subtitle.style.color="#555555"; wrap.appendChild(subtitle);
 
   const table=document.createElement("table"); table.style.width="100%"; table.style.borderCollapse="collapse"; table.style.fontSize="9px";
-  const headers=["Tipo","Código","Nombre","Categoría","Marca","Modelo","Serial","Estado","Espacio / Ubicación","Responsable","Unidad","Stock","Stock Mínimo","Fecha de Ingreso","Fecha de Asignación"];
+  const headers=["Tipo","Código","Nombre","Categoría","Marca","Modelo","Serial","Estado","Espacio / Ubicación","Responsable","Unidad","Stock","Stock Mínimo","Prioridad de Alerta","Fecha de Ingreso","Fecha de Asignación"];
   const thead=document.createElement("thead"),hr=document.createElement("tr");
   headers.forEach(h=>{const th=makeEl("th",h);th.style.border="1px solid #bfc7d4";th.style.padding="5px";th.style.background="#eef2f7";th.style.textAlign="left";hr.appendChild(th)}); thead.appendChild(hr); table.appendChild(thead);
   const tbody=document.createElement("tbody");
@@ -846,12 +1084,11 @@ function exportPdf(){
 }
 
 async function exportOrderWord(){
-  if(!window.docx){showToast("La librería DOCX no está disponible.",true);return}
+  if(!window.docx){showToast("La librería DOCX no está disponible.",true);return;}
   const {Document,Packer,Paragraph,Table,TableRow,TableCell,TextRun,WidthType}=window.docx;
-  const critical=inventario.filter(i=>i.tipo==="Consumible"&&i.stockActual<=i.stockMinimo).sort(sortInventory);
-  const meta=getOrderMeta();
+  const items=getOrderItems(); const meta=getOrderMeta();
   const rows=[new TableRow({children:["N°","Descripción / Material","Stock Actual","Stock Mínimo","Cantidad a Solicitar"].map(x=>new TableCell({children:[new Paragraph(x)]}))})];
-  critical.forEach((i,n)=>rows.push(new TableRow({children:[n+1,i.nombre,i.stockActual,i.stockMinimo,Math.max(1,i.stockMinimo-i.stockActual+1)].map(x=>new TableCell({children:[new Paragraph(String(x))]}))})));
+  items.forEach((item,n)=>rows.push(new TableRow({children:[n+1,item.nombre,item.stockActual,item.stockMinimo,orderQuantities.get(item.idFirebase)||suggestedOrderQuantity(item)].map(x=>new TableCell({children:[new Paragraph(String(x))]}))})));
   const doc=new Document({sections:[{children:[
     new Paragraph({children:[new TextRun({text:"SISTEMA DE GESTIÓN DE INVENTARIO",bold:true,size:28})]}),
     new Paragraph("Orden de Requerimiento de Consumibles"),
@@ -861,12 +1098,78 @@ async function exportOrderWord(){
     new Paragraph(`Solicitado a: ${meta.solicitadoA || "—"}`),
     new Paragraph(`Área / Departamento: ${meta.area || "—"}`),
     new Paragraph(`Nivel de Prioridad: ${meta.prioridad || "—"}`),
-    new Paragraph(`Estado: ${meta.estado || "—"}`),
     new Table({rows,width:{size:100,type:WidthType.PERCENTAGE}}),
-    new Paragraph("Justificación: Reposición de consumibles en nivel crítico."),
+    new Paragraph(`Justificación / Motivo del Pedido: ${meta.justificacion || "—"}`),
     new Paragraph(`\n\n__________________________                         __________________________\n${meta.solicitante?`Solicitado Por: ${meta.solicitante}`:"Solicitado Por"}                         ${meta.solicitadoA?`Solicitado A: ${meta.solicitadoA}`:"Aprobado Por"}`)
   ]}]});
   saveAs(await Packer.toBlob(doc),"orden_requerimiento.docx");
+}
+
+function normalizeImportHeader(value){
+  return sanitizeText(value,120).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]/g,"");
+}
+
+function importValue(row, aliases){
+  const normalized=new Map(Object.entries(row).map(([key,value])=>[normalizeImportHeader(key),value]));
+  for(const alias of aliases){ const value=normalized.get(normalizeImportHeader(alias)); if(value!==undefined && String(value).trim()!=="") return value; }
+  return "";
+}
+
+function parseBulkRow(row,index){
+  const typeRaw=sanitizeText(importValue(row,["Tipo","Tipo de ítem","Tipo de item"]),30).toLowerCase();
+  const tipo=typeRaw.includes("consum")?"Consumible":typeRaw.includes("activo")?"Activo":"";
+  if(!tipo) throw new Error(`Fila ${index}: indique Tipo como Activo o Consumible.`);
+  const raw={
+    tipo,
+    codigo:importValue(row,["Código","Codigo","SKU","Código / SKU","Código / SKU / Serial"]),
+    nombre:importValue(row,["Nombre","Nombre / Descripción","Descripción","Descripcion"]),
+    categoria:importValue(row,["Categoría","Categoria"]),
+    marca:importValue(row,["Marca"]), modelo:importValue(row,["Modelo"]), serial:importValue(row,["Número de serie","Numero de serie","Serial"]),
+    fechaIngreso:importValue(row,["Fecha de ingreso","Fecha ingreso"]), fechaAsignacion:importValue(row,["Fecha de asignación","Fecha asignacion"]),
+    estado:importValue(row,["Estado"]), espacio:importValue(row,["Espacio Físico / Ubicación","Espacio / Ubicación","Ubicación","Ubicacion","Espacio"]),
+    responsable:importValue(row,["Responsable","Persona Responsable / Custodio"]), unidad:importValue(row,["Unidad de medida","Unidad"]),
+    stockActual:importValue(row,["Stock actual","Stock Actual","Stock"]), stockMinimo:importValue(row,["Stock mínimo","Stock minimo","Stock Mínimo"]), prioridadAlerta:importValue(row,["Prioridad de Alerta","Prioridad alerta","Prioridad"])
+  };
+  const item=normalizeItem(raw);
+  if(!item.codigo || !item.nombre || !item.categoria || !item.espacio) throw new Error(`Fila ${index}: faltan Código/SKU, Nombre, Categoría o Espacio.`);
+  if(tipo==="Activo"){
+    if(!item.marca || !item.modelo || !["Disponible","Asignado","En mantenimiento","Baja"].includes(item.estado)) throw new Error(`Fila ${index}: un Activo requiere Marca, Modelo y Estado válido.`);
+    if(item.estado==="Asignado" && (!item.responsable || !item.fechaAsignacion)) throw new Error(`Fila ${index}: un Activo asignado requiere Responsable y Fecha de asignación.`);
+  }else{
+    const stock=safeInt(raw.stockActual), minimo=safeInt(raw.stockMinimo);
+    if(stock===null || minimo===null) throw new Error(`Fila ${index}: un Consumible requiere Stock actual y Stock mínimo enteros.`);
+    item.stockActual=stock; item.stockMinimo=minimo; item.estado="Disponible"; item.prioridadAlerta=item.prioridadAlerta === "Baja" ? "Baja" : "Alta";
+  }
+  return item;
+}
+
+async function importBulkFile(file){
+  if(!file) return;
+  try{
+    const buffer=await file.arrayBuffer();
+    const workbook=XLSX.read(buffer,{type:"array",cellDates:false});
+    const sheet=workbook.Sheets[workbook.SheetNames[0]];
+    if(!sheet) throw new Error("El archivo no contiene una hoja válida.");
+    const rows=XLSX.utils.sheet_to_json(sheet,{defval:""});
+    if(!rows.length) throw new Error("El archivo no contiene registros.");
+    const imported=[]; const usedCodes=new Set(inventario.map(i=>normalizedKey(i.codigo)).filter(Boolean)); const usedSerials=new Set(inventario.map(i=>normalizedKey(i.serial)).filter(Boolean));
+    rows.forEach((row,idx)=>{
+      const item=parseBulkRow(row,idx+2);
+      const code=normalizedKey(item.codigo), serial=normalizedKey(item.serial);
+      if(usedCodes.has(code)) throw new Error(`Fila ${idx+2}: el Código / SKU "${item.codigo}" ya existe.`);
+      if(serial && usedSerials.has(serial)) throw new Error(`Fila ${idx+2}: el Número de serie "${item.serial}" ya existe.`);
+      usedCodes.add(code); if(serial) usedSerials.add(serial); imported.push(item);
+    });
+    if(!confirm(`Se cargarán ${imported.length} registros a Firebase. ¿Continuar?`)) return;
+    const updates={}; const now=Date.now();
+    for(const item of imported){
+      const itemRef=push(inventarioRef); const clean=toFirebasePayload({...item,createdAt:now,updatedAt:now}); updates[`inventario/${itemRef.key}`]=clean;
+      const movementRef=push(movimientosRef); updates[`movimientos/${movementRef.key}`]={fechaHora:now,tipo:item.tipo,codigo:item.codigo,serial:item.serial,nombre:item.nombre,tipoAccion:"Registro",cantidad:item.tipo==="Consumible"?item.stockActual:1,espacioDestino:item.espacio};
+    }
+    await update(ref(db),updates);
+    showToast(`${imported.length} registros cargados correctamente.`);
+  }catch(error){ console.error("Carga masiva:",error); showToast(error.message||"No se pudo procesar el archivo.",true); }
+  finally { $("bulkImportInput").value=""; }
 }
 
 function exportJson(){const data={inventario,movimientos,exportadoEn:Date.now()};const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});saveAs(blob,"backup_inventario.json")}
@@ -887,8 +1190,17 @@ $("clearMovementFiltersBtn").addEventListener("click",()=>{["movementSearchName"
 $("estado").addEventListener("change",toggleLocationFields);$("generateSkuBtn").addEventListener("click",generateSku);$("generateConsumableSkuBtn").addEventListener("click",generateConsumableSku);$("scanBtn").addEventListener("click",()=>startScanner("codigo"));$("generalScanBtn").addEventListener("click",()=>startScanner("generalSearch",()=>renderGeneralInventoryTable()));$("closeScannerBtn").addEventListener("click",stopScanner);
 $("scannerModal").addEventListener("click",e=>{if(e.target===$("scannerModal"))stopScanner()});$("qrModal").addEventListener("click",e=>{if(e.target===$("qrModal"))closeQrModal()});$("closeQrBtn").addEventListener("click",closeQrModal);$("cancelQrBtn").addEventListener("click",closeQrModal);$("downloadQrBtn").addEventListener("click",downloadQrPng);$("orderModal").addEventListener("click",e=>{if(e.target===$("orderModal"))closeOrder()});$("closeOrderModal").addEventListener("click",closeOrder);
 $("movementModal").addEventListener("click",e=>{if(e.target===$("movementModal"))closeMovementModal()});$("closeMovementModal").addEventListener("click",closeMovementModal);$("cancelMovementBtn").addEventListener("click",closeMovementModal);$("movementForm").addEventListener("submit",submitMovement);
-["orderSolicitante","orderSolicitadoA","orderArea"].forEach(id=>$(id).addEventListener("input",buildOrderDocument));["orderPriority","orderStatus"].forEach(id=>$(id).addEventListener("change",buildOrderDocument));
-document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("scannerModal").hidden)stopScanner();if(!$("qrModal").hidden)closeQrModal();if(!$("orderModal").hidden)closeOrder();if(!$("movementModal").hidden)closeMovementModal()}});
+["orderSolicitante","orderSolicitadoA","orderArea","orderJustification"].forEach(id=>$(id).addEventListener("input",buildOrderDocument));["orderPriority"].forEach(id=>$(id).addEventListener("change",buildOrderDocument));
+document.querySelectorAll(".alert-filter").forEach(btn=>btn.addEventListener("click",()=>{alertFilter=btn.dataset.alertFilter||"all";renderCriticals();if(!$("orderModal").hidden)buildOrderDocument();}));
+$("serial").addEventListener("input",()=>{clearTimeout(serialValidationTimer);serialValidationTimer=setTimeout(()=>validateSerialField(assetEditingId || $("editingId").value || ""),250);});
+$("serial").addEventListener("blur",()=>validateSerialField(assetEditingId || $("editingId").value || ""));
+$("cSerial").addEventListener("input",()=>{clearTimeout(consumableSerialValidationTimer);consumableSerialValidationTimer=setTimeout(()=>validateConsumableSerialField(consumableEditingId || $("cEditingId").value || ""),250);});
+$("cSerial").addEventListener("blur",()=>validateConsumableSerialField(consumableEditingId || $("cEditingId").value || ""));
+$("scanSerialBtn").addEventListener("click",()=>startScanner("serial",()=>validateSerialField(assetEditingId || $("editingId").value || "")));
+$("scanConsumableSerialBtn").addEventListener("click",()=>startScanner("cSerial",()=>validateConsumableSerialField(consumableEditingId || $("cEditingId").value || "")));
+$("transferModal").addEventListener("click",e=>{if(e.target===$("transferModal"))closeTransferModal()});$("closeTransferBtn").addEventListener("click",closeTransferModal);$("cancelTransferBtn").addEventListener("click",closeTransferModal);$("transferForm").addEventListener("submit",submitTransfer);
+$("bulkImportInput").addEventListener("change",e=>importBulkFile(e.target.files[0]));
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("scannerModal").hidden)stopScanner();if(!$("qrModal").hidden)closeQrModal();if(!$("orderModal").hidden)closeOrder();if(!$("movementModal").hidden)closeMovementModal();if(!$("transferModal").hidden)closeTransferModal()}});
 $("assetForm").addEventListener("submit",async e=>{
   e.preventDefault();
   if(isFormCompletelyBlank("assetForm")){showToast("Todos los campos están vacíos",true);return;}
@@ -896,6 +1208,8 @@ $("assetForm").addEventListener("submit",async e=>{
   try {
     const item=buildItemFromForm("Activo");
     const id=String(assetEditingId || $("editingId").value || "").trim();
+    validateCurrentCode(item.codigo,id);
+    if(item.serial && !await validateSerialField(id)) throw new Error($("serial").validationMessage);
     if(id){
       const previous=inventario.find(x=>x.idFirebase===id);
       if(!previous) throw new Error("El registro que intenta editar ya no está disponible. Recargue la página.");
@@ -915,6 +1229,9 @@ $("consumableForm").addEventListener("submit",async e=>{
   try {
     const item=buildItemFromForm("Consumible");
     const id=String(consumableEditingId || $("cEditingId").value || "").trim();
+    validateCurrentCode(item.codigo,id);
+    const duplicateSerial=findDuplicateSerial(item.serial,id);
+    if(duplicateSerial) throw new Error(`El número de serie ya existe en "${duplicateSerial.nombre || "otro registro"}".`);
     if(id){
       const previous=inventario.find(x=>x.idFirebase===id);
       if(!previous) throw new Error("El consumible que intenta editar ya no está disponible. Recargue la página.");
@@ -935,5 +1252,5 @@ $("exportExcelBtn").addEventListener("click",exportExcel);$("exportPdfBtn").addE
 window.addEventListener("beforeunload",()=>{if(scannerRunning&&scanner)scanner.stop().catch(()=>{})});
 
 onValue(inventarioRef,snapshot=>{const data=snapshot.val()||{};renderizarInventario(Object.entries(data).map(([id,v])=>({...(v||{}),idFirebase:id})));},err=>{setSync("Error de conexión","error");showToast("Firebase rechazó la lectura. Revise las reglas.",true)});
-onValue(movimientosRef,snapshot=>{const data=snapshot.val()||{};movimientos=Object.values(data).map(m=>({fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)}));renderMovements();},()=>setSync("Error de movimientos","error"));
+onValue(movimientosRef,snapshot=>{const data=snapshot.val()||{};movimientos=Object.values(data).map(m=>({fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)}));renderMovements();renderInventoryTable();renderGeneralInventoryTable();renderAnalytics();},()=>setSync("Error de movimientos","error"));
 toggleLocationFields();

@@ -81,8 +81,8 @@
           <div class="field"><label for="categoria">Categoría</label><input id="categoria" maxlength="80" placeholder="Ej. Redes, CCTV, Audio" required></div>
           <div class="field"><label for="marca">Marca</label><input id="marca" maxlength="80" required></div>
           <div class="field"><label for="modelo">Modelo</label><input id="modelo" maxlength="100" required></div>
-          <div class="field"><label for="serial">Número de serie</label><input id="serial" maxlength="100"></div>
-          <div class="field"><label for="fechaIngreso">Fecha de ingreso</label><input id="fechaIngreso" type="date" required></div>
+          <div class="field"><label for="serial">Número de serie <span class="optional-label">(opcional)</span></label><div class="inline-controls"><input id="serial" maxlength="100"><button id="scanSerialBtn" type="button" class="btn primary">Escanear</button></div></div>
+          <div class="field"><label for="fechaIngreso">Fecha de ingreso</label><input id="fechaIngreso" type="date"></div>
           <div id="assignmentDateField" class="field hidden"><label for="fechaAsignacion">Fecha de asignación</label><input id="fechaAsignacion" type="date"></div>
 
           <div class="field"><label for="estado">Estado</label>
@@ -120,6 +120,7 @@
           <div class="toolbar">
             <button id="exportExcelBtn" class="btn secondary"><i class="fa-solid fa-file-excel" aria-hidden="true"></i><span>Excel</span></button>
             <button id="exportPdfBtn" class="btn secondary"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i><span>PDF</span></button>
+            <label class="btn secondary file-btn"><i class="fa-solid fa-file-arrow-up" aria-hidden="true"></i><span>Cargar CSV / Excel</span><input id="bulkImportInput" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"></label>
           </div>
         </div>
 
@@ -152,19 +153,39 @@
           <div class="field"><label for="cCategoria">Categoría</label><input id="cCategoria" maxlength="80" required></div>
           <div class="field"><label for="cMarca">Marca <span class="optional-label">(opcional)</span></label><input id="cMarca" maxlength="80"></div>
           <div class="field"><label for="cModelo">Modelo <span class="optional-label">(opcional)</span></label><input id="cModelo" maxlength="100"></div>
-          <div class="field"><label for="cUnidad">Unidad de medida</label><input id="cUnidad" maxlength="40" placeholder="Unidad, caja, metro..." required></div>
-          <div class="field"><label for="cFecha">Fecha de ingreso</label><input id="cFecha" type="date" required></div>
+          <div class="field"><label for="cSerial">Número de serie <span class="optional-label">(opcional)</span></label><div class="inline-controls"><input id="cSerial" maxlength="100"><button id="scanConsumableSerialBtn" type="button" class="btn primary">Escanear</button></div></div>
+          <div class="field"><label for="cUnidad">Unidad de medida</label><input id="cUnidad" maxlength="40" placeholder="Unidad, caja, metro..."></div>
+          <div class="field"><label for="cFecha">Fecha de ingreso</label><input id="cFecha" type="date"></div>
            <div class="field"><label for="cEspacio">Espacio Físico / Ubicación</label><input id="cEspacio" maxlength="120" placeholder="Ej. Estante B-2, Bodega TIC" required></div>
           <div class="field"><label for="cStock">Stock actual</label><input id="cStock" type="number" min="0" step="1" inputmode="numeric" required></div>
           <div class="field"><label for="cMinimo">Stock mínimo</label><input id="cMinimo" type="number" min="0" step="1" inputmode="numeric" required></div>
+          <div class="field"><label for="cPrioridadAlerta">Prioridad de Alerta</label><select id="cPrioridadAlerta"><option value="Alta" selected>Alta</option><option value="Baja">Baja</option></select></div>
           <div class="form-actions full"><button class="btn primary" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i><span>Guardar consumible</span></button><button id="clearConsumableBtn" class="btn secondary" type="button"><i class="fa-solid fa-eraser" aria-hidden="true"></i><span>Limpiar</span></button></div>
         </form>
+        <div class="analytics-dashboard" aria-label="Analítica de consumibles">
+          <div class="analytics-head"><div><h3>Analítica de Consumo</h3><p>Indicadores calculados en tiempo real a partir del historial de salidas.</p></div></div>
+          <div class="analytics-grid">
+            <article class="analytics-card"><span>Artículo de mayor consumo</span><strong id="analyticsTopItem">—</strong><small id="analyticsTopItemDetail">0 unidades salidas</small></article>
+            <article class="analytics-card"><span>Espacio / área de mayor demanda</span><strong id="analyticsTopSpace">—</strong><small id="analyticsTopSpaceDetail">0 unidades demandadas</small></article>
+            <article class="analytics-card"><span>Cruce más frecuente</span><strong id="analyticsTopPair">—</strong><small id="analyticsTopPairDetail">0 unidades</small></article>
+            <article class="analytics-card"><span>Nivel de rotación</span><strong id="analyticsRotationSummary">—</strong><small id="analyticsRotationDetail">Salidas registradas en los últimos 90 días</small></article>
+          </div>
+          <div class="analytics-lower">
+            <article class="analytics-list-card"><h4>Top 3 espacios con mayor consumo</h4><ol id="analyticsTopSpacesList"></ol></article>
+            <article class="analytics-list-card"><h4>Rotación por artículo</h4><div id="analyticsRotationList" class="rotation-list"></div></article>
+          </div>
+        </div>
       </section>
 
       <section id="alertas" class="panel">
         <div class="panel-head">
-          <div><h2>Alertas y Requerimientos</h2><p>Consumibles cuyo stock actual es menor o igual al stock mínimo.</p></div>
+          <div><h2>Alertas y Requerimientos</h2><p>Consumibles con stock crítico o en nivel preventivo según el mínimo establecido.</p></div>
           <button id="generateOrderBtn" class="btn primary"><i class="fa-solid fa-file-circle-plus" aria-hidden="true"></i><span>Generar Orden de Requerimiento</span></button>
+        </div>
+        <div class="alert-filter-tabs" role="tablist" aria-label="Filtro de urgencia">
+          <button type="button" class="alert-filter active" data-alert-filter="all">Todas</button>
+          <button type="button" class="alert-filter" data-alert-filter="critical">Solo Críticas</button>
+          <button type="button" class="alert-filter" data-alert-filter="preventive">Solo Preventivas</button>
         </div>
         <div id="criticalList" class="critical-grid"></div>
       </section>
@@ -225,10 +246,21 @@
         <div class="field"><label for="orderSolicitadoA">Solicitado a</label><input id="orderSolicitadoA" maxlength="120" placeholder="Persona, área o proveedor al que se solicita"></div>
         <div class="field"><label for="orderArea">Área / Departamento</label><input id="orderArea" maxlength="120" placeholder="Área o dependencia"></div>
         <div class="field"><label for="orderPriority">Nivel de prioridad</label><select id="orderPriority"><option>Normal</option><option>Alta</option><option>Urgente</option></select></div>
-        <div class="field"><label for="orderStatus">Estado</label><select id="orderStatus"><option>Pendiente</option><option>En revisión</option><option>Aprobada</option><option>Rechazada</option><option>Atendida</option></select></div>
+        <div class="field full"><label for="orderJustification">Justificación / Motivo del Pedido</label><textarea id="orderJustification" rows="3" maxlength="500" placeholder="Ej. Reposición de insumos agotados para mantenimiento"></textarea></div>
       </div>
       <div id="orderDocument" class="order-document"></div>
       <div class="modal-actions"><button id="downloadOrderPdfBtn" class="btn primary"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i><span>Descargar PDF</span></button><button id="downloadOrderWordBtn" class="btn secondary"><i class="fa-solid fa-file-word" aria-hidden="true"></i><span>Descargar Word</span></button></div>
+    </div>
+  </div>
+
+  <div id="transferModal" class="modal-backdrop" hidden aria-hidden="true">
+    <div class="modal transfer-modal" role="dialog" aria-modal="true" aria-labelledby="transferTitle">
+      <div class="modal-head"><h3 id="transferTitle">Traslado Express</h3><button id="closeTransferBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
+      <form id="transferForm" class="movement-form" novalidate>
+        <div class="movement-info"><strong id="transferItemName">Artículo</strong><span id="transferItemLocation">Ubicación actual: —</span></div>
+        <div class="field"><label for="transferDestination">Nuevo Espacio Físico / Ubicación</label><input id="transferDestination" maxlength="120" required placeholder="Ej. Coordinación, Estante B-2"></div>
+        <div class="modal-actions"><button id="cancelTransferBtn" type="button" class="btn secondary"><i class="fa-solid fa-xmark" aria-hidden="true"></i><span>Cancelar</span></button><button id="saveTransferBtn" type="submit" class="btn primary"><i class="fa-solid fa-location-arrow" aria-hidden="true"></i><span>Guardar traslado</span></button></div>
+      </form>
     </div>
   </div>
 
