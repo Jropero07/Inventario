@@ -31,6 +31,7 @@ let alertFilter = "all";
 const selectedAlertIds = new Set();
 let orderQuantities = new Map();
 let transferItem = null;
+let pendingDeleteId = null;
 
 const LIMITS = { codigo:80, nombre:140, categoria:80, marca:80, modelo:100, serial:100, espacio:120, responsable:120, unidad:40 };
 
@@ -77,8 +78,14 @@ function normalizeItem(raw) {
     stockActual: Number.isSafeInteger(raw.stockActual) && raw.stockActual >= 0 ? raw.stockActual : 0,
     stockMinimo: Number.isSafeInteger(raw.stockMinimo) && raw.stockMinimo >= 0 ? raw.stockMinimo : 0,
     prioridadAlerta: raw.prioridadAlerta === "Baja" ? "Baja" : "Alta",
-    createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
-    updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : Date.now()
+    // Auditoría independiente: creación y última modificación.
+    fechaCreacion: Number.isFinite(raw.fechaCreacion) ? raw.fechaCreacion : (Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now()),
+    fechaUltimaModificacion: Number.isFinite(raw.fechaUltimaModificacion)
+      ? raw.fechaUltimaModificacion
+      : ((Number.isFinite(raw.updatedAt) && raw.updatedAt > (Number.isFinite(raw.fechaCreacion) ? raw.fechaCreacion : (Number.isFinite(raw.createdAt) ? raw.createdAt : 0))) ? raw.updatedAt : 0),
+    // Campos antiguos conservados por compatibilidad.
+    createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : (Number.isFinite(raw.fechaCreacion) ? raw.fechaCreacion : Date.now()),
+    updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : (Number.isFinite(raw.fechaUltimaModificacion) && raw.fechaUltimaModificacion > 0 ? raw.fechaUltimaModificacion : (Number.isFinite(raw.fechaCreacion) ? raw.fechaCreacion : Date.now()))
   };
   return item;
 }
@@ -227,8 +234,11 @@ async function guardarItemFirebase(item, existingId="") {
     const before=inventario.find(x=>x.idFirebase===id);
     if(!before) throw new Error("No se encontró el registro original para editarlo. Vuelva a cargar la página e inténtelo de nuevo.");
 
-    clean.createdAt=Number.isFinite(before.createdAt) ? before.createdAt : Date.now();
-    clean.updatedAt=Date.now();
+    const now=Date.now();
+    clean.fechaCreacion=Number.isFinite(before.fechaCreacion) ? before.fechaCreacion : (Number.isFinite(before.createdAt) ? before.createdAt : now);
+    clean.fechaUltimaModificacion=now;
+    clean.createdAt=clean.fechaCreacion;
+    clean.updatedAt=now;
     await update(ref(db,`inventario/${id}`), clean);
     await registrarMovimiento(
       { ...clean, idFirebase:id },
@@ -240,8 +250,11 @@ async function guardarItemFirebase(item, existingId="") {
   }
 
   const nuevo=push(inventarioRef);
-  clean.createdAt=Date.now();
-  clean.updatedAt=Date.now();
+  const now=Date.now();
+  clean.fechaCreacion=now;
+  clean.fechaUltimaModificacion=0;
+  clean.createdAt=now;
+  clean.updatedAt=now;
   await set(nuevo,clean);
   await registrarMovimiento({ ...clean, idFirebase:nuevo.key },"Registro",clean.tipo==="Consumible"?clean.stockActual:1,clean.espacio);
 }
@@ -298,6 +311,7 @@ async function registrarMovimientoStock(idFirebase, delta, cantidad, destination
     return {
       ...current,
       stockActual:next,
+      fechaUltimaModificacion:Date.now(),
       updatedAt:Date.now()
     };
   });
@@ -403,6 +417,38 @@ function filteredInventory() {
   });
 }
 
+function requestDeleteItem(item) {
+  const current=inventario.find(x=>x.idFirebase===item.idFirebase);
+  if(!current) return;
+  pendingDeleteId=current.idFirebase;
+  $("deleteConfirmMessage").textContent=`¿Está seguro de que desea eliminar el artículo ${current.nombre}?`;
+  $("deleteConfirmModal").hidden=false;
+  $("deleteConfirmModal").setAttribute("aria-hidden","false");
+}
+
+function closeDeleteConfirm() {
+  pendingDeleteId=null;
+  $("deleteConfirmModal").hidden=true;
+  $("deleteConfirmModal").setAttribute("aria-hidden","true");
+}
+
+async function confirmDeleteItem() {
+  if(!pendingDeleteId) return;
+  const id=pendingDeleteId;
+  const item=inventario.find(x=>x.idFirebase===id);
+  if(!item){ closeDeleteConfirm(); showToast("El artículo ya no existe.",true); return; }
+  try {
+    await eliminarItemFirebase(id);
+    selectedAlertIds.delete(id);
+    orderQuantities.delete(id);
+    closeDeleteConfirm();
+    showToast("Artículo eliminado correctamente.");
+  } catch(error) {
+    console.error("Error al eliminar:",error);
+    showToast("No se pudo eliminar el artículo.",true);
+  }
+}
+
 function renderTableRow(item) {
   const tr=document.createElement("tr");
   addCell(tr,item.tipo); addCell(tr,item.codigo);
@@ -425,11 +471,7 @@ function renderTableRow(item) {
   act.append(button("fa-copy","Copiar","copy",()=>duplicateItem(item),"Duplicar registro"));
   act.append(button("fa-qrcode","QR","qr",()=>openQrModal(item),"Generar código QR"));
   act.append(button("fa-location-arrow","Traslado","transfer",()=>openTransferModal(item),"Traslado Express"));
-  act.append(button("fa-trash","Eliminar","delete",async()=>{
-    if(confirm(`¿Eliminar "${item.nombre}"?`)){
-      try{await eliminarItemFirebase(item.idFirebase)}catch(e){showToast("No se pudo eliminar.",true)}
-    }
-  }));
+  act.append(button("fa-trash","Eliminar","delete",()=>requestDeleteItem(item)));
   tr.appendChild(act);
   return tr;
 }
@@ -526,25 +568,29 @@ function renderCriticals() {
   });
 }
 
-function latestMovementForItem(item) {
-  const code=normalizedKey(item.codigo);
-  const serial=normalizedKey(item.serial);
-  let latest=0;
-  for(const m of movimientos){
-    if(normalizedKey(m.codigo)!==code) continue;
-    if(serial && normalizedKey(m.serial) && normalizedKey(m.serial)!==serial) continue;
-    latest=Math.max(latest,Number(m.fechaHora)||0);
-  }
-  return Math.max(latest,Number(item.updatedAt)||0);
+function activityTimestamp(item) {
+  const creation=Number(item.fechaCreacion) || Number(item.createdAt) || 0;
+  const modification=Number(item.fechaUltimaModificacion) || 0;
+  return { creation, modification: modification > creation ? modification : 0 };
+}
+
+function formatActivityBadge(item) {
+  const {creation,modification}=activityTimestamp(item);
+  const isModified=modification>0;
+  const ts=isModified?modification:creation;
+  if(!ts) return makeEl("span","Sin fecha","activity-badge none");
+  const ageMs=Math.max(0,Date.now()-ts);
+  const ageMinutes=Math.floor(ageMs/60000);
+  const ageDays=Math.floor(ageMs/86400000);
+  const prefix=isModified?"Modificado":"Creado";
+  if(ageMinutes<1) return makeEl("span",`${prefix} justo ahora`,"activity-badge today");
+  if(ageMinutes<60) return makeEl("span",`${prefix} hace ${ageMinutes} min`,"activity-badge recent");
+  if(ageDays===1) return makeEl("span",`${prefix} ayer`,"activity-badge recent");
+  return makeEl("span",`${prefix} hace ${ageDays} días`,"activity-badge recent");
 }
 
 function movementBadge(item) {
-  const ts=latestMovementForItem(item);
-  if(!ts) return makeEl("span","Sin movimiento","activity-badge none");
-  const ageDays=Math.max(0,Math.floor((Date.now()-ts)/86400000));
-  if(ageDays===0) return makeEl("span","Modificado Hoy","activity-badge today");
-  if(ageDays>180) return makeEl("span","Sin movimiento >6 meses","activity-badge old");
-  return makeEl("span",`Hace ${ageDays} día${ageDays===1?"":"s"}`,"activity-badge recent");
+  return formatActivityBadge(item);
 }
 
 function renderAnalytics() {
@@ -883,7 +929,8 @@ async function submitTransfer(event){
   const id=transferItem.idFirebase;
   try{
     const itemRef=ref(db,`inventario/${id}`);
-    await update(itemRef,{espacio:destination,updatedAt:Date.now()});
+    const now=Date.now();
+    await update(itemRef,{espacio:destination,fechaUltimaModificacion:now,updatedAt:now});
     await registrarMovimiento({...transferItem,espacio:destination},"Edición",0,destination);
     closeTransferModal();
     showToast(`Ubicación cambiada a ${destination}`);
@@ -972,10 +1019,12 @@ function suggestedOrderQuantity(item){
 }
 
 function getOrderItems(){
-  return inventario.filter(item=>selectedAlertIds.has(item.idFirebase) && alertLevel(item)).sort((a,b)=>{
+  const visible=filteredAlerts().sort((a,b)=>{
     const levelOrder={critical:0,preventive:1};
     return (levelOrder[alertLevel(a)]-levelOrder[alertLevel(b)]) || sortInventory(a,b);
   });
+  const selectedVisible=visible.filter(item=>selectedAlertIds.has(item.idFirebase));
+  return selectedVisible.length ? selectedVisible : visible;
 }
 
 function buildOrderDocument() {
@@ -1163,7 +1212,7 @@ async function importBulkFile(file){
     if(!confirm(`Se cargarán ${imported.length} registros a Firebase. ¿Continuar?`)) return;
     const updates={}; const now=Date.now();
     for(const item of imported){
-      const itemRef=push(inventarioRef); const clean=toFirebasePayload({...item,createdAt:now,updatedAt:now}); updates[`inventario/${itemRef.key}`]=clean;
+      const itemRef=push(inventarioRef); const clean=toFirebasePayload({...item,fechaCreacion:now,fechaUltimaModificacion:0,createdAt:now,updatedAt:now}); updates[`inventario/${itemRef.key}`]=clean;
       const movementRef=push(movimientosRef); updates[`movimientos/${movementRef.key}`]={fechaHora:now,tipo:item.tipo,codigo:item.codigo,serial:item.serial,nombre:item.nombre,tipoAccion:"Registro",cantidad:item.tipo==="Consumible"?item.stockActual:1,espacioDestino:item.espacio};
     }
     await update(ref(db),updates);
@@ -1173,7 +1222,7 @@ async function importBulkFile(file){
 }
 
 function exportJson(){const data={inventario,movimientos,exportadoEn:Date.now()};const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});saveAs(blob,"backup_inventario.json")}
-async function importJson(file){if(!file)return;try{const data=JSON.parse(await file.text());if(!Array.isArray(data.inventario))throw new Error();if(!confirm("Esto agregará los registros del respaldo a Firebase. ¿Continuar?"))return;for(const raw of data.inventario){const item=normalizeItem(raw);delete item.idFirebase;await set(push(inventarioRef),item)}if(Array.isArray(data.movimientos)){for(const m of data.movimientos)await set(push(movimientosRef),{fechaHora:Number(m.fechaHora)||Date.now(),tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)})}showToast("Copia importada correctamente.");}catch{showToast("Archivo JSON inválido.",true)}}
+async function importJson(file){if(!file)return;try{const data=JSON.parse(await file.text());if(!Array.isArray(data.inventario))throw new Error();if(!confirm("Esto agregará los registros del respaldo a Firebase. ¿Continuar?"))return;for(const raw of data.inventario){const item=normalizeItem(raw);const now=Date.now();const created=Number(item.fechaCreacion)||Number(item.createdAt)||now;const modified=Number(item.fechaUltimaModificacion)||0;item.fechaCreacion=created;item.fechaUltimaModificacion=modified>created?modified:0;item.createdAt=created;item.updatedAt=item.fechaUltimaModificacion||created;delete item.idFirebase;await set(push(inventarioRef),item)}if(Array.isArray(data.movimientos)){for(const m of data.movimientos)await set(push(movimientosRef),{fechaHora:Number(m.fechaHora)||Date.now(),tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)})}showToast("Copia importada correctamente.");}catch{showToast("Archivo JSON inválido.",true)}}
 function activateTab(id){document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===id));document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x.dataset.tab===id))}
 
 $("globalSearch").addEventListener("input",()=>{
@@ -1199,8 +1248,9 @@ $("cSerial").addEventListener("blur",()=>validateConsumableSerialField(consumabl
 $("scanSerialBtn").addEventListener("click",()=>startScanner("serial",()=>validateSerialField(assetEditingId || $("editingId").value || "")));
 $("scanConsumableSerialBtn").addEventListener("click",()=>startScanner("cSerial",()=>validateConsumableSerialField(consumableEditingId || $("cEditingId").value || "")));
 $("transferModal").addEventListener("click",e=>{if(e.target===$("transferModal"))closeTransferModal()});$("closeTransferBtn").addEventListener("click",closeTransferModal);$("cancelTransferBtn").addEventListener("click",closeTransferModal);$("transferForm").addEventListener("submit",submitTransfer);
+$("deleteConfirmModal").addEventListener("click",e=>{if(e.target===$("deleteConfirmModal"))closeDeleteConfirm()});$("closeDeleteConfirmBtn").addEventListener("click",closeDeleteConfirm);$("cancelDeleteConfirmBtn").addEventListener("click",closeDeleteConfirm);$("confirmDeleteBtn").addEventListener("click",confirmDeleteItem);
 $("bulkImportInput").addEventListener("change",e=>importBulkFile(e.target.files[0]));
-document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("scannerModal").hidden)stopScanner();if(!$("qrModal").hidden)closeQrModal();if(!$("orderModal").hidden)closeOrder();if(!$("movementModal").hidden)closeMovementModal();if(!$("transferModal").hidden)closeTransferModal()}});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("scannerModal").hidden)stopScanner();if(!$("qrModal").hidden)closeQrModal();if(!$("orderModal").hidden)closeOrder();if(!$("movementModal").hidden)closeMovementModal();if(!$("transferModal").hidden)closeTransferModal();if(!$("deleteConfirmModal").hidden)closeDeleteConfirm()}});
 $("assetForm").addEventListener("submit",async e=>{
   e.preventDefault();
   if(isFormCompletelyBlank("assetForm")){showToast("Todos los campos están vacíos",true);return;}

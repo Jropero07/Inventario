@@ -1323,3 +1323,45 @@ th {
     margin-left: auto;
   }
 }
+
+
+/* -------------------------
+   21. Ajustes de buscador y confirmación de eliminación
+   ------------------------- */
+.general-filters {
+  gap: 12px;
+}
+
+.general-filters .search-with-scan {
+  gap: 10px;
+  margin-right: 2px;
+}
+
+.general-filters .search-with-scan + select {
+  margin-left: 2px;
+}
+
+.delete-confirm-modal {
+  width: min(520px, 100%);
+}
+
+.delete-confirm-content {
+  padding: 22px 20px 8px;
+}
+
+.delete-confirm-content p {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.btn.danger {
+  background: #b91c1c;
+  color: #ffffff;
+  border-color: #b91c1c;
+}
+
+.btn.danger:hover {
+  background: #991b1b;
+  border-color: #991b1b;
+}
