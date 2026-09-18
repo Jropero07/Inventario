@@ -106,19 +106,20 @@ function requireField(id, required) {
   if (field) field.required = required;
 }
 
-function buildItemFromForm(formKind) {
+function buildItemFromForm(formKind, prefix="") {
+  const field=(id)=>$(prefix+id);
   if(formKind==="Consumible") {
-    const stock=safeInt($("cStock").value), minimo=safeInt($("cMinimo").value);
-    const codigo=sanitizeText($("cCodigo").value,LIMITS.codigo);
-    const nombre=sanitizeText($("cNombre").value,LIMITS.nombre);
-    const categoria=sanitizeText($("cCategoria").value,LIMITS.categoria);
-    const marca=sanitizeText($("cMarca").value,LIMITS.marca);
-    const modelo=sanitizeText($("cModelo").value,LIMITS.modelo);
-    const serial=sanitizeText($("cSerial").value,LIMITS.serial);
-    const unidad=sanitizeText($("cUnidad").value,LIMITS.unidad);
-    const fechaIngreso=sanitizeText($("cFecha").value,20);
-    const espacio=sanitizeText($("cEspacio").value,LIMITS.espacio);
-    const prioridadAlerta=$("cPrioridadAlerta").value === "Baja" ? "Baja" : "Alta";
+    const stock=safeInt(field("cStock").value), minimo=safeInt(field("cMinimo").value);
+    const codigo=sanitizeText(field("cCodigo").value,LIMITS.codigo);
+    const nombre=sanitizeText(field("cNombre").value,LIMITS.nombre);
+    const categoria=sanitizeText(field("cCategoria").value,LIMITS.categoria);
+    const marca=sanitizeText(field("cMarca").value,LIMITS.marca);
+    const modelo=sanitizeText(field("cModelo").value,LIMITS.modelo);
+    const serial=sanitizeText(field("cSerial").value,LIMITS.serial);
+    const unidad=sanitizeText(field("cUnidad").value,LIMITS.unidad);
+    const fechaIngreso=sanitizeText(field("cFecha").value,20);
+    const espacio=sanitizeText(field("cEspacio").value,LIMITS.espacio);
+    const prioridadAlerta=field("cPrioridadAlerta").value === "Baja" ? "Baja" : "Alta";
 
     if(!codigo || !nombre || !categoria || !espacio || stock===null || minimo===null){
       throw new Error("Todos los campos son obligatorios para guardar un consumible.");
@@ -131,17 +132,17 @@ function buildItemFromForm(formKind) {
     });
   }
 
-  const codigo=sanitizeText($("codigo").value,LIMITS.codigo);
-  const nombre=sanitizeText($("nombre").value,LIMITS.nombre);
-  const categoria=sanitizeText($("categoria").value,LIMITS.categoria);
-  const marca=sanitizeText($("marca").value,LIMITS.marca);
-  const modelo=sanitizeText($("modelo").value,LIMITS.modelo);
-  const serial=sanitizeText($("serial").value,LIMITS.serial); // Opcional por especificación.
-  const fechaIngreso=sanitizeText($("fechaIngreso").value,20);
-  const estado=["Disponible","Asignado","En mantenimiento","Baja"].includes($("estado").value)?$("estado").value:"Disponible";
-  const espacio=sanitizeText($("espacio").value,LIMITS.espacio);
-  const fechaAsignacion=estado==="Asignado" ? sanitizeText($("fechaAsignacion").value,20) : "";
-  const responsable=estado==="Asignado" ? sanitizeText($("responsable").value,LIMITS.responsable) : "";
+  const codigo=sanitizeText(field("codigo").value,LIMITS.codigo);
+  const nombre=sanitizeText(field("nombre").value,LIMITS.nombre);
+  const categoria=sanitizeText(field("categoria").value,LIMITS.categoria);
+  const marca=sanitizeText(field("marca").value,LIMITS.marca);
+  const modelo=sanitizeText(field("modelo").value,LIMITS.modelo);
+  const serial=sanitizeText(field("serial").value,LIMITS.serial);
+  const fechaIngreso=sanitizeText(field("fechaIngreso").value,20);
+  const estado=["Disponible","Asignado","En mantenimiento","Baja"].includes(field("estado").value)?field("estado").value:"Disponible";
+  const espacio=sanitizeText(field("espacio").value,LIMITS.espacio);
+  const fechaAsignacion=estado==="Asignado" ? sanitizeText(field("fechaAsignacion").value,20) : "";
+  const responsable=estado==="Asignado" ? sanitizeText(field("responsable").value,LIMITS.responsable) : "";
 
   if(!codigo || !nombre || !categoria || !marca || !modelo || !estado || !espacio){
     throw new Error("Complete todos los campos obligatorios del activo. El número de serie es opcional.");
@@ -678,101 +679,140 @@ function renderMovements() {
   $("movementCount").textContent=`${data.length} movimientos`;
 }
 
-function populateEditForm(item) {
+function cloneFormForEdit(item) {
+  const sourceId=item.tipo==="Consumible" ? "consumableForm" : "assetForm";
+  const prefix=item.tipo==="Consumible" ? "editConsumable_" : "editAsset_";
+  const source=$(sourceId);
+  const form=source.cloneNode(true);
+  form.id=prefix+(item.tipo==="Consumible" ? "form" : "form");
+  form.dataset.editPrefix=prefix;
+  form.classList.add("edit-modal-form");
+  form.removeAttribute("novalidate");
+
+  form.querySelectorAll("[id]").forEach(el=>{
+    const oldId=el.id;
+    el.id=prefix+oldId;
+  });
+  form.querySelectorAll("label[for]").forEach(label=>label.htmlFor=prefix+label.htmlFor);
+
+  const editingId=prefix+(item.tipo==="Consumible" ? "cEditingId" : "editingId");
+  const hidden=$(editingId);
+  if(hidden) hidden.value=item.idFirebase;
+
   if(item.tipo==="Consumible") {
-    assetEditingId="";
-    $("editingId").value="";
-    consumableEditingId=item.idFirebase;
-    $("cEditingId").value=item.idFirebase;
-    $("cCodigo").value=item.codigo;
-    $("cNombre").value=item.nombre;
-    $("cCategoria").value=item.categoria;
-    $("cMarca").value=item.marca;
-    $("cModelo").value=item.modelo;
-    $("cSerial").value=item.serial;
-    $("cUnidad").value=item.unidad;
-    $("cFecha").value=item.fechaIngreso;
-    $("cEspacio").value=item.espacio;
-    $("cStock").value=item.stockActual;
-    $("cMinimo").value=item.stockMinimo;
-    $("cPrioridadAlerta").value=item.prioridadAlerta || "Alta";
-    return;
+    const set=(id,value)=>{const el=$(prefix+id);if(el)el.value=value??"";};
+    set("cCodigo",item.codigo); set("cNombre",item.nombre); set("cCategoria",item.categoria);
+    set("cMarca",item.marca); set("cModelo",item.modelo); set("cSerial",item.serial);
+    set("cUnidad",item.unidad); set("cFecha",item.fechaIngreso); set("cEspacio",item.espacio);
+    set("cStock",item.stockActual); set("cMinimo",item.stockMinimo); set("cPrioridadAlerta",item.prioridadAlerta||"Alta");
+    const save=$(prefix+"saveConsumableBtn");
+    if(save) save.textContent="Guardar cambios";
+    const clear=$(prefix+"clearConsumableBtn");
+    if(clear) clear.textContent="Cancelar";
+    const scan=$(prefix+"scanConsumableSerialBtn");
+    if(scan) scan.addEventListener("click",()=>startScanner(prefix+"cSerial",()=>validateSerialInputField(prefix+"cSerial",item.idFirebase)));
+    form.addEventListener("submit",event=>submitEditModal(event,item,prefix));
+    if(clear) clear.addEventListener("click",()=>closeEditModal(true));
+    return {form,prefix};
   }
 
-  consumableEditingId="";
-  $("cEditingId").value="";
-  assetEditingId=item.idFirebase;
-  $("editingId").value=item.idFirebase;
-  $("codigo").value=item.codigo;
-  $("nombre").value=item.nombre;
-  $("categoria").value=item.categoria;
-  $("marca").value=item.marca;
-  $("modelo").value=item.modelo;
-  $("serial").value=item.serial;
-  $("fechaIngreso").value=item.fechaIngreso;
-  $("fechaAsignacion").value=item.fechaAsignacion;
-  $("estado").value=item.estado;
-  $("espacio").value=item.espacio;
-  $("responsable").value=item.responsable;
-  toggleLocationFields();
-  $("saveItemBtn").textContent="Guardar cambios";
+  const set=(id,value)=>{const el=$(prefix+id);if(el)el.value=value??"";};
+  set("codigo",item.codigo); set("nombre",item.nombre); set("categoria",item.categoria);
+  set("marca",item.marca); set("modelo",item.modelo); set("serial",item.serial);
+  set("fechaIngreso",item.fechaIngreso); set("fechaAsignacion",item.fechaAsignacion);
+  set("estado",item.estado); set("espacio",item.espacio); set("responsable",item.responsable);
+  toggleLocationFieldsFor(prefix);
+  const save=$(prefix+"saveItemBtn");
+  if(save) save.innerHTML='<i class="fa-solid fa-floppy-disk" aria-hidden="true"></i><span>Guardar cambios</span>';
+  const clear=$(prefix+"cancelEditBtn");
+  if(clear) clear.innerHTML='<i class="fa-solid fa-xmark" aria-hidden="true"></i><span>Cancelar</span>';
+  const scan=$(prefix+"scanBtn");
+  if(scan) scan.addEventListener("click",()=>startScanner(prefix+"codigo"));
+  const state=$(prefix+"estado");
+  if(state) state.addEventListener("change",()=>toggleLocationFieldsFor(prefix));
+  form.addEventListener("submit",event=>submitEditModal(event,item,prefix));
+  if(clear) clear.addEventListener("click",()=>closeEditModal(true));
+  return {form,prefix};
+}
+
+function toggleLocationFieldsFor(prefix="") {
+  const state=$(prefix+"estado");
+  const responsibleField=$(prefix+"responsableField");
+  const assignmentField=$(prefix+"assignmentDateField");
+  const responsible=$(prefix+"responsable");
+  const assignmentDate=$(prefix+"fechaAsignacion");
+  if(!state || !responsibleField || !assignmentField || !responsible || !assignmentDate) return;
+  const assigned=state.value==="Asignado";
+  responsibleField.classList.toggle("hidden",!assigned);
+  assignmentField.classList.toggle("hidden",!assigned);
+  responsible.required=assigned;
+  assignmentDate.required=assigned;
+  if(assigned && !assignmentDate.value) assignmentDate.value=new Date().toISOString().slice(0,10);
+  if(!assigned) assignmentDate.value="";
+}
+
+async function submitEditModal(event,item,prefix) {
+  event.preventDefault();
+  const form=event.currentTarget;
+  if(isFormCompletelyBlank(form.id)){showToast("Todos los campos están vacíos",true);return;}
+  if(!form.checkValidity()){form.reportValidity();return;}
+  const id=item.idFirebase;
+  try {
+    const kind=item.tipo;
+    const built=buildItemFromForm(kind,prefix);
+    validateCurrentCode(built.codigo,id);
+    const serialField=kind==="Consumible" ? prefix+"cSerial" : prefix+"serial";
+    if(built.serial && !await validateSerialInputField(serialField,id)) throw new Error($(serialField).validationMessage);
+    await guardarItemFirebase(built,id);
+    finishEditModalAfterSave();
+    showToast("Cambios guardados correctamente.");
+  } catch(error) {
+    showToast(error.message||"No se pudo guardar.",true);
+  }
 }
 
 function openEditModal(item) {
   if(!item || !item.idFirebase) return;
-  if(!$("editModal").hidden) closeEditModal(false);
+  if(!$('editModal').hidden) closeEditModal(false);
   editModalContext={
     scrollY:window.scrollY,
-    activeTab:document.querySelector(".panel.active")?.id || (item.tipo==="Consumible"?"consumibles":"activos")
+    activeTab:document.querySelector('.panel.active')?.id || (item.tipo==='Consumible'?'consumibles':'activos')
   };
+  const {form}=cloneFormForEdit(item);
   editModalFormKind=item.tipo;
-  populateEditForm(item);
-  const form=item.tipo==="Consumible" ? $("consumableForm") : $("assetForm");
-  const placeholder=item.tipo==="Consumible" ? $("consumableFormPlaceholder") : $("assetFormPlaceholder");
-  if(form && placeholder) {
-    placeholder.hidden=false;
-    placeholder.setAttribute("aria-hidden","false");
-    placeholder.parentNode.insertBefore(form,placeholder);
-  }
-  $("editModalTitle").textContent=`Editar ${item.tipo.toLowerCase()}`;
-  $("editModalBody").appendChild(form);
-  $("editModal").hidden=false;
-  $("editModal").setAttribute("aria-hidden","false");
+  const body=$('editModalBody');
+  body.replaceChildren(form);
+  $('editModalTitle').textContent=`Editar ${item.tipo.toLowerCase()}`;
+  $('editModal').hidden=false;
+  $('editModal').setAttribute('aria-hidden','false');
   requestAnimationFrame(()=>{
-    const first=form.querySelector("input:not([type=hidden]), select, textarea");
+    const first=form.querySelector('input:not([type=hidden]), select, textarea');
     if(first) first.focus({preventScroll:true});
   });
 }
 
-function restoreEditForm() {
-  if(!editModalFormKind) return;
-  const form=editModalFormKind==="Consumible" ? $("consumableForm") : $("assetForm");
-  const placeholder=editModalFormKind==="Consumible" ? $("consumableFormPlaceholder") : $("assetFormPlaceholder");
-  if(form && placeholder && placeholder.parentNode) placeholder.parentNode.insertBefore(form,placeholder.nextSibling);
-  if(placeholder){ placeholder.hidden=true; placeholder.setAttribute("aria-hidden","true"); }
-  editModalFormKind="";
-}
-
 function closeEditModal(restore=true) {
-  if($("editModal").hidden) return;
-  restoreEditForm();
-  $("editModal").hidden=true;
-  $("editModal").setAttribute("aria-hidden","true");
+  if($('editModal').hidden) return;
+  $('editModalBody').replaceChildren();
+  $('editModal').hidden=true;
+  $('editModal').setAttribute('aria-hidden','true');
+  editModalFormKind='';
   if(restore && editModalContext){
     const y=editModalContext.scrollY;
-    requestAnimationFrame(()=>requestAnimationFrame(()=>window.scrollTo({top:y,left:0,behavior:"auto"})));
+    requestAnimationFrame(()=>requestAnimationFrame(()=>window.scrollTo({top:y,left:0,behavior:'auto'})));
   }
   editModalContext=null;
 }
 
 function finishEditModalAfterSave() {
-  if($("editModal").hidden) return;
+  if($('editModal').hidden) return;
   closeEditModal(true);
 }
 
 function editItem(item) {
   openEditModal(item);
 }
+
 function clearAssetForm(){
   $("assetForm").reset();
   $("editingId").value="";

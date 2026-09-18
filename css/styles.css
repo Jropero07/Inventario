@@ -1415,10 +1415,6 @@ th {
 /* -------------------------
    21. Edición en modal sin perder contexto
    ------------------------- */
-.form-modal-placeholder[hidden] {
-  display: none;
-}
-
 .edit-modal {
   width: min(980px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
