@@ -119,7 +119,7 @@
           <div><h2>Inventario General</h2><p>Consulte y filtre todos los activos y consumibles registrados.</p></div>
           <div class="toolbar">
             <button id="exportExcelBtn" class="btn secondary"><i class="fa-solid fa-file-excel" aria-hidden="true"></i><span>Excel</span></button>
-            <button id="exportPdfBtn" class="btn secondary"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i><span>PDF</span></button>
+            <button id="exportPdfBtn" class="btn secondary"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i><span>Imprimir PDF</span></button>
             <label class="btn secondary file-btn"><i class="fa-solid fa-file-arrow-up" aria-hidden="true"></i><span>Cargar CSV / Excel</span><input id="bulkImportInput" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"></label>
           </div>
         </div>
@@ -130,7 +130,7 @@
           <select id="filterStatus"><option value="">Todos los estados</option><option>Disponible</option><option>Asignado</option><option>En mantenimiento</option><option>Baja</option></select>
           <select id="filterCategory"><option value="">Todas las categorías</option></select>
           <select id="filterSpace"><option value="">Todos los espacios físicos</option></select>
-          <button id="clearFiltersBtn" class="btn secondary"><i class="fa-solid fa-eraser" aria-hidden="true"></i><span>Limpiar filtros</span></button>
+          <button id="clearFiltersBtn" class="btn secondary"><i class="fa-solid fa-eraser" aria-hidden="true"></i><span>Limpiar filtros</span></button><span id="generalMatchCount" class="filter-count">0 coincidencias</span>
         </div>
 
         <div class="table-card">
@@ -218,6 +218,27 @@
     </div>
   </div>
 
+  <div id="cloneModal" class="modal-backdrop" hidden aria-hidden="true">
+    <div class="modal clone-modal" role="dialog" aria-modal="true" aria-labelledby="cloneModalTitle">
+      <div class="modal-head"><h3 id="cloneModalTitle">Clonar artículo</h3><button id="closeCloneBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
+      <form id="cloneForm" class="form-grid clone-form" novalidate>
+        <div class="field"><label for="cloneTipo">Tipo</label><input id="cloneTipo" readonly></div>
+        <div class="field code-field"><label for="cloneCodigo">Código / SKU</label><input id="cloneCodigo" maxlength="80" required><small id="cloneSkuStatus" class="clone-validation"></small></div>
+        <div class="field"><label for="cloneNombre">Nombre / Descripción</label><input id="cloneNombre" maxlength="140" required></div>
+        <div class="field"><label for="cloneCategoria">Categoría</label><input id="cloneCategoria" maxlength="80" required></div>
+        <div class="field"><label for="cloneMarca">Marca</label><input id="cloneMarca" maxlength="80"></div>
+        <div class="field"><label for="cloneModelo">Modelo</label><input id="cloneModelo" maxlength="100"></div>
+        <div class="field"><label for="cloneSerial">Número de serie <span class="optional-label">(se deja vacío)</span></label><input id="cloneSerial" maxlength="100"><small id="cloneSerialStatus" class="clone-validation"></small></div>
+        <div class="field"><label for="cloneFecha">Fecha de ingreso</label><input id="cloneFecha" type="date"></div>
+        <div class="field"><label for="cloneEspacio">Espacio Físico / Ubicación</label><input id="cloneEspacio" maxlength="120" required></div>
+        <div class="field full"><label for="cloneEspecificaciones">Especificaciones</label><textarea id="cloneEspecificaciones" rows="3" maxlength="1000"></textarea></div>
+        <div id="cloneAssetFields" class="clone-subgrid full"><div class="field"><label for="cloneEstado">Estado</label><select id="cloneEstado"><option>Disponible</option><option>Asignado</option><option>En mantenimiento</option><option>Baja</option></select></div><div class="field"><label for="cloneResponsible">Responsable</label><input id="cloneResponsible" maxlength="120"></div></div>
+        <div id="cloneConsumableFields" class="clone-subgrid full hidden"><div class="field"><label for="cloneUnidad">Unidad</label><input id="cloneUnidad" maxlength="40"></div><div class="field"><label for="cloneStock">Stock inicial</label><input id="cloneStock" type="number" min="0" step="1" value="0"></div><div class="field"><label for="cloneMinimo">Stock mínimo</label><input id="cloneMinimo" type="number" min="0" step="1"></div><div class="field"><label for="clonePrioridad">Prioridad de Alerta</label><select id="clonePrioridad"><option>Alta</option><option>Baja</option></select></div></div>
+        <div class="modal-actions full"><button id="cancelCloneBtn" type="button" class="btn secondary"><i class="fa-solid fa-xmark" aria-hidden="true"></i><span>Cancelar</span></button><button type="submit" class="btn primary"><i class="fa-solid fa-copy" aria-hidden="true"></i><span>Guardar clon</span></button></div>
+      </form>
+    </div>
+  </div>
+
   <div id="scannerModal" class="modal-backdrop" hidden aria-hidden="true">
     <div class="modal scanner-modal" role="dialog" aria-modal="true" aria-labelledby="scannerTitle">
       <div class="modal-head"><h3 id="scannerTitle">Escanear código</h3><button id="closeScannerBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
@@ -280,6 +301,15 @@
         <div id="qrCanvas" class="qr-canvas" aria-label="Código QR generado"></div>
       </div>
       <div class="modal-actions"><button id="cancelQrBtn" type="button" class="btn secondary"><i class="fa-solid fa-xmark" aria-hidden="true"></i><span>Cerrar</span></button><button id="downloadQrBtn" type="button" class="btn primary"><i class="fa-solid fa-download" aria-hidden="true"></i><span>Descargar PNG</span></button></div>
+    </div>
+  </div>
+
+  <div id="lifecycleModal" class="modal-backdrop" hidden aria-hidden="true">
+    <div class="modal lifecycle-modal" role="dialog" aria-modal="true" aria-labelledby="lifecycleTitle">
+      <div class="modal-head"><div><h3 id="lifecycleTitle">Hoja de vida</h3><span id="lifecycleCode" class="muted"></span></div><button id="closeLifecycleBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
+      <div id="lifecycleFicha" class="lifecycle-ficha"></div>
+      <div class="lifecycle-notes"><h4>Notas de mantenimiento / intervenciones</h4><textarea id="lifecycleNote" rows="3" maxlength="1000" placeholder="Describa la intervención realizada..."></textarea><div class="modal-actions"><button id="saveLifecycleNoteBtn" type="button" class="btn secondary"><i class="fa-solid fa-note-sticky" aria-hidden="true"></i><span>Guardar nota</span></button><button id="printLifecycleBtn" type="button" class="btn primary"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i><span>Ficha técnica PDF</span></button></div></div>
+      <div class="lifecycle-history"><h4>Historial de vida</h4><div id="lifecycleHistory"></div></div>
     </div>
   </div>
 

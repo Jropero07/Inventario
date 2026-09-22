@@ -1,5 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js";
 import { getDatabase, ref, push, set, onValue, remove, update, runTransaction } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-database.js";
+import { getFirestore, collection, doc, setDoc, addDoc, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyB-FX1wyTkycQ-21QRDf5VWy5p9N__ZNl8",
@@ -13,6 +14,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
+const firestore = getFirestore(app);
 const inventarioRef = ref(db, "inventario");
 const movimientosRef = ref(db, "movimientos");
 
@@ -35,7 +37,7 @@ let pendingDeleteId = null;
 let editModalContext = null;
 let editModalFormKind = "";
 
-const LIMITS = { codigo:80, nombre:140, categoria:80, marca:80, modelo:100, serial:100, espacio:120, responsable:120, unidad:40 };
+const LIMITS = { codigo:80, nombre:140, categoria:80, marca:80, modelo:100, serial:100, espacio:120, responsable:120, unidad:40, especificaciones:1000 };
 
 function sanitizeText(value, max=160) {
   return String(value ?? "")
@@ -80,6 +82,7 @@ function normalizeItem(raw) {
     stockActual: Number.isSafeInteger(raw.stockActual) && raw.stockActual >= 0 ? raw.stockActual : 0,
     stockMinimo: Number.isSafeInteger(raw.stockMinimo) && raw.stockMinimo >= 0 ? raw.stockMinimo : 0,
     prioridadAlerta: raw.prioridadAlerta === "Baja" ? "Baja" : "Alta",
+    especificaciones: sanitizeText(raw.especificaciones, LIMITS.especificaciones),
     // Auditoría independiente: creación y última modificación.
     fechaCreacion: Number.isFinite(raw.fechaCreacion) ? raw.fechaCreacion : (Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now()),
     fechaUltimaModificacion: Number.isFinite(raw.fechaUltimaModificacion)
@@ -229,6 +232,29 @@ function toFirebasePayload(item) {
   return clean;
 }
 
+async function syncFirestoreAsset(item,id) {
+  try {
+    const payload={...toFirebasePayload(item), idFirebase:id, firestoreUpdatedAt:serverTimestamp()};
+    await setDoc(doc(firestore,"inventario",id),payload,{merge:true});
+  } catch(error) {
+    console.warn("Firestore no disponible para la auditoría; la operación principal se mantiene en RTDB.",error);
+  }
+}
+
+async function addLifecycleEvent(item,eventType,details="") {
+  if(item.tipo!=="Activo") return;
+  try {
+    await addDoc(collection(firestore,"inventario",item.idFirebase,"hojaVida"),{fechaHora:serverTimestamp(),tipo:sanitizeText(eventType,80),detalle:sanitizeText(details,1000),ubicacion:item.espacio||"",responsable:item.responsable||"",estado:item.estado||""});
+  } catch(error) { console.warn("No se pudo registrar evento en Hoja de Vida.",error); }
+}
+
+function itemComparable(item) {
+  const x=normalizeItem(item);
+  delete x.idFirebase; delete x.createdAt; delete x.updatedAt; delete x.fechaUltimaModificacion; delete x.fechaCreacion;
+  return JSON.stringify(x);
+}
+function hasRealItemChange(before, after) { return itemComparable(before) !== itemComparable(after); }
+
 async function guardarItemFirebase(item, existingId="") {
   const clean=toFirebasePayload(item);
   const id=String(existingId || "").trim();
@@ -238,11 +264,16 @@ async function guardarItemFirebase(item, existingId="") {
     if(!before) throw new Error("No se encontró el registro original para editarlo. Vuelva a cargar la página e inténtelo de nuevo.");
 
     const now=Date.now();
-    clean.fechaCreacion=Number.isFinite(before.fechaCreacion) ? before.fechaCreacion : (Number.isFinite(before.createdAt) ? before.createdAt : now);
-    clean.fechaUltimaModificacion=now;
-    clean.createdAt=clean.fechaCreacion;
-    clean.updatedAt=now;
+    const created=Number.isFinite(before.fechaCreacion) ? before.fechaCreacion : (Number.isFinite(before.createdAt) ? before.createdAt : now);
+    const changed=hasRealItemChange(before,clean);
+    clean.fechaCreacion=created;
+    clean.fechaUltimaModificacion=changed ? now : (Number(before.fechaUltimaModificacion)||0);
+    clean.createdAt=created;
+    clean.updatedAt=changed ? now : (Number(before.updatedAt)||created);
+    if(!changed) return;
     await update(ref(db,`inventario/${id}`), clean);
+    await syncFirestoreAsset({...clean,idFirebase:id},id);
+    await addLifecycleEvent({...clean,idFirebase:id},"Edición","Cambio real de datos del activo");
     await registrarMovimiento(
       { ...clean, idFirebase:id },
       "Edición",
@@ -259,6 +290,8 @@ async function guardarItemFirebase(item, existingId="") {
   clean.createdAt=now;
   clean.updatedAt=now;
   await set(nuevo,clean);
+  await syncFirestoreAsset({...clean,idFirebase:nuevo.key},nuevo.key);
+  if(clean.tipo==="Activo") await addLifecycleEvent({...clean,idFirebase:nuevo.key},"Registro de creación","Creación inicial del activo");
   await registrarMovimiento({ ...clean, idFirebase:nuevo.key },"Registro",clean.tipo==="Consumible"?clean.stockActual:1,clean.espacio);
 }
 window.guardarItemFirebase = guardarItemFirebase;
@@ -331,6 +364,8 @@ async function registrarMovimientoStock(idFirebase, delta, cantidad, destination
   const finalStock=safeInt(committedSnapshot?.stockActual);
   if(finalStock===null) throw new Error("Firebase devolvió un stock no válido.");
 
+  await syncFirestoreAsset({...item,stockActual:finalStock,idFirebase:id},id);
+  await addLifecycleEvent({...item,stockActual:finalStock,idFirebase:id},"Ajuste de stock",`${delta>0?"Entrada":"Salida"} de ${cantidad} unidad${cantidad===1?"":"es"}`);
   await registrarMovimiento(
     { ...item, stockActual:finalStock },
     delta>0 ? "Entrada" : "Salida",
@@ -394,8 +429,18 @@ function renderSummary() {
   $("summaryMaintenance").textContent=String(assets.filter(i=>i.estado==="En mantenimiento").length);
 }
 
+async function ensureFirestoreMirror(items){
+  try {
+    const snap=await getDocs(collection(firestore,"inventario"));
+    const existing=new Set(snap.docs.map(d=>d.id));
+    const jobs=items.filter(item=>item.idFirebase && !existing.has(item.idFirebase)).map(item=>syncFirestoreAsset(item,item.idFirebase));
+    await Promise.allSettled(jobs);
+  } catch(error){ console.warn("No se pudo completar el espejo inicial de Firestore.",error); }
+}
+
 function renderizarInventario(items) {
   inventario=items.map(normalizeItem);
+  ensureFirestoreMirror(inventario);
   setSync("Sincronizado en tiempo real","ok");
   renderSummary();
   renderInventoryTable(); renderGeneralInventoryTable(); renderFilters(); renderCriticals(); renderAnalytics();
@@ -473,6 +518,7 @@ function renderTableRow(item) {
   act.append(button("fa-pen-to-square","Editar","edit",()=>editItem(item)));
   act.append(button("fa-copy","Copiar","copy",()=>duplicateItem(item),"Duplicar registro"));
   act.append(button("fa-qrcode","QR","qr",()=>openQrModal(item),"Generar código QR"));
+  if(item.tipo==="Activo") act.append(button("fa-file-medical","Hoja de vida","lifecycle",()=>openLifecycleModal(item),"Abrir hoja de vida"));
   act.append(button("fa-location-arrow","Traslado","transfer",()=>openTransferModal(item),"Traslado Express"));
   act.append(button("fa-trash","Eliminar","delete",()=>requestDeleteItem(item)));
   tr.appendChild(act);
@@ -490,7 +536,8 @@ function renderGeneralInventoryTable() {
   const body=$("generalInventoryTableBody"); body.replaceChildren();
   const data=filteredInventory().sort(sortInventory);
   for(const item of data) body.appendChild(renderTableRow(item));
-  $("generalInventoryCount").textContent=`${data.length} registros`;
+  $("generalInventoryCount").textContent=`Mostrando ${data.length} de ${inventario.length} artículos`;
+  if($("generalMatchCount")) $("generalMatchCount").textContent=`${data.length} coincidencias`;
 }
 
 function sortInventory(a,b){
@@ -577,19 +624,22 @@ function activityTimestamp(item) {
   return { creation, modification: modification > creation ? modification : 0 };
 }
 
+function formatElapsedActivity(prefix, ts) {
+  if(!ts) return makeEl("span", "Sin fecha", "activity-badge none");
+  const ageMs=Math.max(0,Date.now()-ts);
+  const minutes=Math.floor(ageMs/60000);
+  const hours=Math.floor(ageMs/3600000);
+  const days=Math.floor(ageMs/86400000);
+  if(minutes < 1) return makeEl("span", `${prefix} justo ahora`, "activity-badge today");
+  if(minutes < 60) return makeEl("span", `${prefix} hace ${minutes} min`, "activity-badge recent");
+  if(hours < 24) return makeEl("span", `${prefix} hace ${hours} ${hours===1?"hora":"horas"}`, "activity-badge recent");
+  if(days === 1) return makeEl("span", `${prefix} ayer`, "activity-badge recent");
+  return makeEl("span", `${prefix} hace ${days} ${days===1?"día":"días"}`, "activity-badge recent");
+}
+
 function formatActivityBadge(item) {
   const {creation,modification}=activityTimestamp(item);
-  const isModified=modification>0;
-  const ts=isModified?modification:creation;
-  if(!ts) return makeEl("span","Sin fecha","activity-badge none");
-  const ageMs=Math.max(0,Date.now()-ts);
-  const ageMinutes=Math.floor(ageMs/60000);
-  const ageDays=Math.floor(ageMs/86400000);
-  const prefix=isModified?"Modificado":"Creado";
-  if(ageMinutes<1) return makeEl("span",`${prefix} justo ahora`,"activity-badge today");
-  if(ageMinutes<60) return makeEl("span",`${prefix} hace ${ageMinutes} min`,"activity-badge recent");
-  if(ageDays===1) return makeEl("span",`${prefix} ayer`,"activity-badge recent");
-  return makeEl("span",`${prefix} hace ${ageDays} días`,"activity-badge recent");
+  return formatElapsedActivity(modification ? "Modificado" : "Creado", modification || creation);
 }
 
 function movementBadge(item) {
@@ -878,45 +928,108 @@ function toggleLocationFields(){
   if(!assigned) $("fechaAsignacion").value="";
 }
 
-function duplicateItem(item) {
-  assetEditingId="";
-  consumableEditingId="";
-  if (item.tipo === "Consumible") {
-    activateTab("consumibles");
-    $("cEditingId").value="";
-    $("cCodigo").value="";
-    $("cNombre").value=item.nombre;
-    $("cCategoria").value=item.categoria;
-    $("cMarca").value=item.marca;
-    $("cModelo").value=item.modelo;
-    $("cSerial").value="";
-    $("cUnidad").value=item.unidad;
-    $("cFecha").value=item.fechaIngreso;
-    $("cEspacio").value=item.espacio;
-    $("cStock").value="0";
-    $("cMinimo").value=String(item.stockMinimo);
-    $("cPrioridadAlerta").value=item.prioridadAlerta || "Alta";
-    showToast("Copia preparada. Escriba un nuevo código.");
-    return;
-  }
+let cloneItemContext=null;
+let cloneValidationTimer=null;
 
-  activateTab("activos");
-  $("editingId").value="";
-  $("codigo").value="";
-  $("nombre").value=item.nombre;
-  $("categoria").value=item.categoria;
-  $("marca").value=item.marca;
-  $("modelo").value=item.modelo;
-  $("serial").value="";
-  $("fechaIngreso").value="";
-  $("fechaAsignacion").value="";
-  $("estado").value="Disponible";
-  $("espacio").value=item.espacio;
-  $("responsable").value="";
-  $("saveItemBtn").textContent="Guardar activo";
-  toggleLocationFields();
-  showToast("Registro copiado. Código y serial quedaron vacíos.");
+async function firestoreInventorySnapshot() {
+  try {
+    const snap=await getDocs(collection(firestore,"inventario"));
+    return snap.docs.map(d=>({idFirebase:d.id,...(d.data()||{})}));
+  } catch(error) {
+    console.warn("Firestore no disponible para validación avanzada; se usará el estado local.", error);
+    return [];
+  }
 }
+
+async function nextAvailableSkuAsync(tipo,categoria) {
+  const prefix=`${tipo==="Consumible"?"CON":"ACT"}-${categoryPrefix(categoria,"GEN")}`;
+  const local=inventario.map(i=>i.codigo);
+  const remote=(await firestoreInventorySnapshot()).map(i=>i.codigo);
+  const used=new Set([...local,...remote].map(normalizedKey).filter(Boolean));
+  let n=1;
+  while(used.has(`${prefix}-${String(n).padStart(3,"0")}`)) n++;
+  return `${prefix}-${String(n).padStart(3,"0")}`;
+}
+
+async function validateCloneUniqueness() {
+  const code=sanitizeText($("cloneCodigo").value,LIMITS.codigo);
+  const serial=sanitizeText($("cloneSerial").value,LIMITS.serial);
+  const status=$("cloneSkuStatus"), serialStatus=$("cloneSerialStatus");
+  let duplicateCode= !validateUniqueCode(code,"");
+  let duplicateSerial= !!findDuplicateSerial(serial,"");
+  const remote=await firestoreInventorySnapshot();
+  if(code) duplicateCode ||= remote.some(i=>normalizedKey(i.codigo)===normalizedKey(code));
+  if(serial) duplicateSerial ||= remote.some(i=>normalizedKey(i.serial)===normalizedKey(serial));
+  $("cloneCodigo").setCustomValidity(duplicateCode?"El Código / SKU ya existe.":"");
+  $("cloneSerial").setCustomValidity(duplicateSerial?"El número de serie ya existe.":"");
+  status.textContent=code?(duplicateCode?"SKU duplicado":"SKU disponible"):"";
+  status.className=`clone-validation ${duplicateCode?"invalid":"valid"}`;
+  serialStatus.textContent=serial?(duplicateSerial?"Serial duplicado":"Serial disponible"):"";
+  serialStatus.className=`clone-validation ${duplicateSerial?"invalid":"valid"}`;
+  return !duplicateCode && !duplicateSerial;
+}
+
+async function openCloneModal(item) {
+  cloneItemContext=item;
+  const isConsumable=item.tipo==="Consumible";
+  $("cloneModalTitle").textContent=`Clonar ${item.tipo.toLowerCase()}`;
+  $("cloneTipo").value=item.tipo;
+  $("cloneCodigo").value=await nextAvailableSkuAsync(item.tipo,item.categoria);
+  $("cloneNombre").value=item.nombre||"";
+  $("cloneCategoria").value=item.categoria||"";
+  $("cloneMarca").value=item.marca||"";
+  $("cloneModelo").value=item.modelo||"";
+  $("cloneSerial").value="";
+  $("cloneEspacio").value=item.espacio||"";
+  $("cloneEspecificaciones").value=item.especificaciones||"";
+  $("cloneMinimo").value=isConsumable?String(item.stockMinimo??0):"";
+  $("cloneStock").value=isConsumable?"0":"";
+  $("cloneUnidad").value=isConsumable?item.unidad||"":"";
+  $("clonePrioridad").value=item.prioridadAlerta||"Alta";
+  $("cloneEstado").value=isConsumable?"Disponible":"Disponible";
+  $("cloneResponsible").value="";
+  $("cloneFecha").value=normalizeDateInputValue(item.fechaIngreso)||new Date().toISOString().slice(0,10);
+  $("cloneConsumableFields").classList.toggle("hidden",!isConsumable);
+  $("cloneAssetFields").classList.toggle("hidden",isConsumable);
+  $("cloneSkuStatus").textContent="SKU sugerido"; $("cloneSkuStatus").className="clone-validation valid";
+  $("cloneSerialStatus").textContent="";
+  $("cloneModal").hidden=false; $("cloneModal").setAttribute("aria-hidden","false");
+  setTimeout(()=>$("cloneCodigo").focus(),50);
+}
+
+function closeCloneModal(){
+  cloneItemContext=null;
+  $("cloneModal").hidden=true; $("cloneModal").setAttribute("aria-hidden","true");
+}
+
+async function submitClone(event){
+  event.preventDefault();
+  if(!cloneItemContext) return;
+  const form=event.currentTarget;
+  if(!form.checkValidity()){form.reportValidity();return;}
+  try {
+    if(!(await validateCloneUniqueness())) { showToast("El SKU o el número de serie ya existe. Corrija los datos antes de guardar.",true); return; }
+    const isConsumable=cloneItemContext.tipo==="Consumible";
+    const raw={
+      tipo:cloneItemContext.tipo, codigo:sanitizeText($("cloneCodigo").value,LIMITS.codigo), nombre:sanitizeText($("cloneNombre").value,LIMITS.nombre),
+      categoria:sanitizeText($("cloneCategoria").value,LIMITS.categoria), marca:sanitizeText($("cloneMarca").value,LIMITS.marca), modelo:sanitizeText($("cloneModelo").value,LIMITS.modelo),
+      serial:"", fechaIngreso:normalizeDateInputValue($("cloneFecha").value), espacio:sanitizeText($("cloneEspacio").value,LIMITS.espacio),
+      especificaciones:sanitizeText($("cloneEspecificaciones").value,LIMITS.especificaciones), unidad:isConsumable?sanitizeText($("cloneUnidad").value,LIMITS.unidad):"",
+      stockActual:isConsumable?(safeInt($("cloneStock").value)??0):0, stockMinimo:isConsumable?(safeInt($("cloneMinimo").value)??0):0,
+      prioridadAlerta:isConsumable&&$("clonePrioridad").value==="Baja"?"Baja":"Alta", estado:"Disponible", responsable:""
+    };
+    if(!raw.codigo || !raw.nombre || !raw.categoria || !raw.espacio) throw new Error("Complete los campos obligatorios de la clonación.");
+    const clean=normalizeItem(raw);
+    const newRef=push(inventarioRef); const now=Date.now(); clean.fechaCreacion=now; clean.fechaUltimaModificacion=0; clean.createdAt=now; clean.updatedAt=now;
+    await set(newRef,toFirebasePayload(clean));
+    await registrarMovimiento({...clean,idFirebase:newRef.key},"Registro",isConsumable?clean.stockActual:1,clean.espacio);
+    await syncFirestoreAsset(clean,newRef.key);
+    if(clean.tipo==="Activo") await addLifecycleEvent({...clean,idFirebase:newRef.key},"Registro de clonación","Creación mediante clonación");
+    closeCloneModal(); showToast("Artículo clonado correctamente.");
+  } catch(error){ console.error(error); showToast(error.message||"No se pudo clonar el artículo.",true); }
+}
+
+function duplicateItem(item) { openCloneModal(inventario.find(x=>x.idFirebase===item.idFirebase)||item); }
 
 function nextAvailableSku(tipo, categoria){
   const typePrefix=tipo==="Consumible"?"CON":"ACT";
@@ -1070,13 +1183,61 @@ async function submitTransfer(event){
     const itemRef=ref(db,`inventario/${id}`);
     const now=Date.now();
     await update(itemRef,{espacio:destination,fechaUltimaModificacion:now,updatedAt:now});
-    await registrarMovimiento({...transferItem,espacio:destination},"Edición",0,destination);
+    const updated={...transferItem,espacio:destination,fechaUltimaModificacion:now,updatedAt:now};
+    await syncFirestoreAsset(updated,id);
+    await addLifecycleEvent(updated,"Traslado de ubicación",`De ${transferItem.espacio||"sin ubicación"} a ${destination}`);
+    await registrarMovimiento(updated,"Edición",0,destination);
     closeTransferModal();
     showToast(`Ubicación cambiada a ${destination}`);
   }catch(error){
     console.error("Error en Traslado Express:",error);
     showToast("No se pudo cambiar la ubicación. Revise las reglas de Firebase.",true);
   }
+}
+
+let lifecycleItem=null;
+
+async function openLifecycleModal(item){
+  lifecycleItem=item;
+  $("lifecycleTitle").textContent=`Hoja de vida · ${item.nombre||"Activo"}`;
+  $("lifecycleCode").textContent=`Código: ${item.codigo||"—"}`;
+  $("lifecycleFicha").replaceChildren();
+  const fields=[["Categoría",item.categoria],["Marca",item.marca],["Modelo",item.modelo],["Serial",item.serial||"—"],["Estado",item.estado],["Ubicación",item.espacio||"—"],["Responsable",item.responsable||"—"],["Fecha de ingreso",normalizeDateInputValue(item.fechaIngreso)||"—"],["Fecha de asignación",normalizeDateInputValue(item.fechaAsignacion)||"—"],["Especificaciones",item.especificaciones||"—"]];
+  fields.forEach(([label,value])=>{const box=document.createElement("div");box.className="lifecycle-field";box.append(makeEl("span",label),makeEl("strong",value));$("lifecycleFicha").appendChild(box);});
+  $("lifecycleNote").value="";
+  $("lifecycleModal").hidden=false;$("lifecycleModal").setAttribute("aria-hidden","false");
+  await loadLifecycleEvents(item);
+}
+
+async function loadLifecycleEvents(item){
+  const list=$("lifecycleHistory"); list.replaceChildren();
+  try {
+    const snap=await getDocs(collection(firestore,"inventario",item.idFirebase,"hojaVida"));
+    const events=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>{const at=a.fechaHora?.toMillis?a.fechaHora.toMillis():Number(a.fechaHora)||0;const bt=b.fechaHora?.toMillis?b.fechaHora.toMillis():Number(b.fechaHora)||0;return bt-at;});
+    if(!events.length){list.appendChild(makeEl("p","No hay eventos registrados en la hoja de vida.","muted"));return;}
+    events.forEach(e=>{const row=document.createElement("div");row.className="lifecycle-event";const ts=e.fechaHora?.toMillis?e.fechaHora.toMillis():Number(e.fechaHora)||0;row.append(makeEl("strong",e.tipo||"Evento"),makeEl("span",ts?fmtDateTime(ts):"Fecha pendiente"),makeEl("p",e.detalle||""));list.appendChild(row);});
+  } catch(error){ list.appendChild(makeEl("p","La hoja de vida histórica requiere que Firestore esté habilitado y sus reglas permitan lectura.","muted")); console.warn(error); }
+}
+
+async function saveLifecycleNote(){
+  if(!lifecycleItem) return;
+  const note=sanitizeText($("lifecycleNote").value,LIMITS.especificaciones);
+  if(!note){showToast("Escriba una nota de mantenimiento o intervención.",true);return;}
+  try { await addLifecycleEvent(lifecycleItem,"Nota de mantenimiento",note); $("lifecycleNote").value=""; await loadLifecycleEvents(lifecycleItem); showToast("Nota registrada en la hoja de vida."); }
+  catch(error){showToast("No se pudo registrar la nota.",true);}
+}
+
+function closeLifecycleModal(){lifecycleItem=null;$("lifecycleModal").hidden=true;$("lifecycleModal").setAttribute("aria-hidden","true");}
+
+async function printLifecycleSheet(){
+  if(!lifecycleItem) return;
+  const item=lifecycleItem;
+  const wrap=document.createElement("div");wrap.style.cssText="background:#fff;color:#111;padding:20px;font-family:Arial,sans-serif;width:760px";
+  wrap.append(makeEl("h2","FICHA TÉCNICA / HOJA DE VIDA DEL ACTIVO"),makeEl("p",`Código: ${item.codigo||"—"} · Fecha: ${new Date().toLocaleDateString("es-CO")}`));
+  const table=document.createElement("table");table.style.cssText="width:100%;border-collapse:collapse;font-size:11px";
+  [["Nombre",item.nombre],["Categoría",item.categoria],["Marca",item.marca],["Modelo",item.modelo],["Serial",item.serial||"—"],["Estado",item.estado],["Ubicación",item.espacio||"—"],["Responsable",item.responsable||"—"],["Fecha de ingreso",normalizeDateInputValue(item.fechaIngreso)||"—"],["Fecha de asignación",normalizeDateInputValue(item.fechaAsignacion)||"—"],["Especificaciones",item.especificaciones||"—"]].forEach(([a,b])=>{const tr=document.createElement("tr");[a,b].forEach((v,i)=>{const td=makeEl(i?"td":"th",v);td.style.cssText="border:1px solid #ccd3df;padding:6px;text-align:left";tr.appendChild(td)});table.appendChild(tr)});
+  wrap.appendChild(table);
+  html2pdf().set({margin:8,filename:`ficha_${(item.codigo||"activo").replace(/[^a-zA-Z0-9_-]/g,"_")}.pdf`,html2canvas:{scale:2},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"}}).from(wrap).save();
 }
 
 function getQrValue(item) {
@@ -1240,7 +1401,8 @@ function exportRows(){
     "Stock Mínimo":i.tipo==="Consumible"?i.stockMinimo:"",
     "Prioridad de Alerta":i.tipo==="Consumible"?i.prioridadAlerta:"",
     "Fecha de Ingreso":i.fechaIngreso,
-    "Fecha de Asignación":i.fechaAsignacion
+    "Fecha de Asignación":i.fechaAsignacion,
+    Especificaciones:i.especificaciones
   }));
 }
 
@@ -1390,7 +1552,13 @@ $("transferModal").addEventListener("click",e=>{if(e.target===$("transferModal")
 $("deleteConfirmModal").addEventListener("click",e=>{if(e.target===$("deleteConfirmModal"))closeDeleteConfirm()});$("closeDeleteConfirmBtn").addEventListener("click",closeDeleteConfirm);$("cancelDeleteConfirmBtn").addEventListener("click",closeDeleteConfirm);$("confirmDeleteBtn").addEventListener("click",confirmDeleteItem);
 $("editModal").addEventListener("click",e=>{if(e.target===$("editModal"))closeEditModal(true)});$("closeEditModalBtn").addEventListener("click",()=>closeEditModal(true));
 $("bulkImportInput").addEventListener("change",e=>importBulkFile(e.target.files[0]));
-document.addEventListener("keydown",e=>{if(e.key==="Escape"){if(!$("scannerModal").hidden)stopScanner();if(!$("qrModal").hidden)closeQrModal();if(!$("orderModal").hidden)closeOrder();if(!$("movementModal").hidden)closeMovementModal();if(!$("transferModal").hidden)closeTransferModal();if(!$("deleteConfirmModal").hidden)closeDeleteConfirm();if(!$("editModal").hidden)closeEditModal(true)}});
+$("cloneModal").addEventListener("click",e=>{if(e.target===$("cloneModal"))closeCloneModal()});
+$("closeCloneBtn").addEventListener("click",closeCloneModal);$("cancelCloneBtn").addEventListener("click",closeCloneModal);$("cloneForm").addEventListener("submit",submitClone);
+$("cloneCodigo").addEventListener("input",()=>{clearTimeout(cloneValidationTimer);cloneValidationTimer=setTimeout(validateCloneUniqueness,300)});
+$("cloneSerial").addEventListener("input",()=>{clearTimeout(cloneValidationTimer);cloneValidationTimer=setTimeout(validateCloneUniqueness,300)});
+$("lifecycleModal").addEventListener("click",e=>{if(e.target===$("lifecycleModal"))closeLifecycleModal()});$("closeLifecycleBtn").addEventListener("click",closeLifecycleModal);$("saveLifecycleNoteBtn").addEventListener("click",saveLifecycleNote);$("printLifecycleBtn").addEventListener("click",printLifecycleSheet);
+
+document.addEventListener("keydown",e=>{if(e.key==="Enter" && !e.shiftKey){const target=e.target;if(target.closest(".modal") && target.tagName!=="TEXTAREA"){const form=target.closest("form");if(form){e.preventDefault();if(typeof form.requestSubmit==="function") form.requestSubmit();}}} if(e.key==="Escape"){if(!$("scannerModal").hidden)stopScanner();if(!$("qrModal").hidden)closeQrModal();if(!$("orderModal").hidden)closeOrder();if(!$("movementModal").hidden)closeMovementModal();if(!$("transferModal").hidden)closeTransferModal();if(!$("deleteConfirmModal").hidden)closeDeleteConfirm();if(!$("editModal").hidden)closeEditModal(true)}});
 $("assetForm").addEventListener("submit",async e=>{
   e.preventDefault();
   if(isFormCompletelyBlank("assetForm")){showToast("Todos los campos están vacíos",true);return;}
@@ -1446,3 +1614,4 @@ window.addEventListener("beforeunload",()=>{if(scannerRunning&&scanner)scanner.s
 onValue(inventarioRef,snapshot=>{const data=snapshot.val()||{};renderizarInventario(Object.entries(data).map(([id,v])=>({...(v||{}),idFirebase:id})));},err=>{setSync("Error de conexión","error");showToast("Firebase rechazó la lectura. Revise las reglas.",true)});
 onValue(movimientosRef,snapshot=>{const data=snapshot.val()||{};movimientos=Object.values(data).map(m=>({fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)}));renderMovements();renderInventoryTable();renderGeneralInventoryTable();renderAnalytics();},()=>setSync("Error de movimientos","error"));
 toggleLocationFields();
+setInterval(()=>{renderInventoryTable();renderGeneralInventoryTable();renderCriticals();},60000);
