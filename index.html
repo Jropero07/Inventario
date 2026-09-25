@@ -17,7 +17,44 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
   <link rel="stylesheet" href="css/styles.css">
 </head>
-<body>
+<body class="auth-locked">
+  <div id="authScreen" class="auth-screen">
+    <form id="loginCard" class="auth-card" novalidate hidden>
+      <div class="auth-brand"><div class="brand-mark">TI</div><div><strong>Sistema de Gestión</strong><span>Control de Inventario</span></div></div>
+      <h2>Iniciar sesión</h2>
+      <div class="field"><label for="loginUser">Usuario</label><input id="loginUser" autocomplete="username" maxlength="60" required></div>
+      <div class="field"><label for="loginPassword">Contraseña</label><input id="loginPassword" type="password" autocomplete="current-password" required></div>
+      <button id="loginSubmitBtn" class="btn primary" type="submit"><i class="fa-solid fa-right-to-bracket" aria-hidden="true"></i><span>Ingresar</span></button>
+      <button id="forgotLink" class="auth-link" type="button">¿Olvidó su contraseña?</button>
+    </form>
+    <form id="setupCard" class="auth-card" novalidate hidden>
+      <div class="auth-brand"><div class="brand-mark">TI</div><div><strong>Sistema de Gestión</strong><span>Configuración inicial</span></div></div>
+      <h2>Crear Administrador</h2>
+      <p class="auth-note">No hay usuarios registrados. Cree el primer usuario Administrador.</p>
+      <div class="field"><label for="setupUser">Usuario</label><input id="setupUser" autocomplete="username" maxlength="60" required></div>
+      <div class="field"><label for="setupName">Nombre completo</label><input id="setupName" maxlength="120" required></div>
+      <div class="field"><label for="setupPassword">Contraseña (mínimo 8 caracteres)</label><input id="setupPassword" type="password" autocomplete="new-password" required></div>
+      <div class="field"><label for="setupPassword2">Confirmar contraseña</label><input id="setupPassword2" type="password" autocomplete="new-password" required></div>
+      <button class="btn primary" type="submit"><i class="fa-solid fa-user-shield" aria-hidden="true"></i><span>Crear Administrador</span></button>
+    </form>
+    <form id="forgotCard" class="auth-card" novalidate hidden>
+      <h2>Recuperar contraseña</h2>
+      <p class="auth-note">Envíe una solicitud. Un Administrador le asignará una clave temporal que deberá cambiar al ingresar.</p>
+      <div class="field"><label for="forgotUser">Usuario</label><input id="forgotUser" maxlength="60" required></div>
+      <div class="field"><label for="forgotReason">Comentario <span class="optional-label">(opcional)</span></label><input id="forgotReason" maxlength="200"></div>
+      <button class="btn primary" type="submit"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i><span>Enviar solicitud</span></button>
+      <button id="forgotBackBtn" class="auth-link" type="button">Volver al inicio de sesión</button>
+    </form>
+    <form id="forceChangeCard" class="auth-card" novalidate hidden>
+      <h2>Cambiar clave temporal</h2>
+      <p id="forceChangeInfo" class="auth-note"></p>
+      <div class="field"><label for="forcePassword">Nueva contraseña (mínimo 8 caracteres)</label><input id="forcePassword" type="password" autocomplete="new-password" required></div>
+      <div class="field"><label for="forcePassword2">Confirmar nueva contraseña</label><input id="forcePassword2" type="password" autocomplete="new-password" required></div>
+      <button class="btn primary" type="submit"><i class="fa-solid fa-key" aria-hidden="true"></i><span>Guardar y continuar</span></button>
+      <button id="forceLogoutBtn" class="auth-link" type="button">Cancelar y salir</button>
+    </form>
+  </div>
+
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
@@ -41,9 +78,19 @@
         <div><strong id="syncStatus">Conectando...</strong><small>Firebase Realtime Database</small></div>
       </div>
 
+      <div class="user-card">
+        <i class="fa-solid fa-circle-user" aria-hidden="true"></i>
+        <div><strong id="userMenuName"></strong><small id="userMenuRole"></small></div>
+      </div>
+      <div class="sidebar-actions user-actions">
+        <button id="manageUsersBtn" class="btn secondary" type="button" data-perm="usuarios"><i class="fa-solid fa-users-gear" aria-hidden="true"></i><span>Gestión de usuarios</span><span id="userRequestsBadge" class="badge" hidden>0</span></button>
+        <button id="changePasswordBtn" class="btn secondary" type="button"><i class="fa-solid fa-key" aria-hidden="true"></i><span>Cambiar contraseña</span></button>
+        <button id="logoutBtn" class="btn secondary" type="button"><i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i><span>Cerrar sesión</span></button>
+      </div>
+
       <div class="sidebar-actions">
-        <button id="exportJsonBtn" class="btn secondary"><i class="fa-solid fa-file-export" aria-hidden="true"></i><span>Exportar copia JSON</span></button>
-        <label class="btn secondary file-btn"><i class="fa-solid fa-file-import" aria-hidden="true"></i><span>Importar copia JSON</span><input id="importJsonInput" type="file" accept="application/json"></label>
+        <button id="exportJsonBtn" class="btn secondary" data-perm="exportar"><i class="fa-solid fa-file-export" aria-hidden="true"></i><span>Exportar copia JSON</span></button>
+        <label class="btn secondary file-btn" data-perm="importar"><i class="fa-solid fa-file-import" aria-hidden="true"></i><span>Importar copia JSON</span><input id="importJsonInput" type="file" accept="application/json"></label>
       </div>
     </aside>
 
@@ -64,7 +111,7 @@
           <div><h2>Gestión de Activos Fijos</h2><p>Registre equipos, periféricos y demás activos institucionales.</p></div>
         </div>
 
-        <form id="assetForm" class="card form-grid" novalidate>
+        <form id="assetForm" class="card form-grid" novalidate data-perm="crear">
           <input id="editingId" type="hidden">
           <input id="formType" type="hidden" value="Activo">
 
@@ -118,9 +165,9 @@
         <div class="panel-head">
           <div><h2>Inventario General</h2><p>Consulte y filtre todos los activos y consumibles registrados.</p></div>
           <div class="toolbar">
-            <button id="exportExcelBtn" class="btn secondary"><i class="fa-solid fa-file-excel" aria-hidden="true"></i><span>Excel</span></button>
-            <button id="exportPdfBtn" class="btn secondary"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i><span>Imprimir PDF</span></button>
-            <label class="btn secondary file-btn"><i class="fa-solid fa-file-arrow-up" aria-hidden="true"></i><span>Cargar CSV / Excel</span><input id="bulkImportInput" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"></label>
+            <button id="exportExcelBtn" class="btn secondary" data-perm="exportar"><i class="fa-solid fa-file-excel" aria-hidden="true"></i><span>Excel</span></button>
+            <button id="exportPdfBtn" class="btn secondary" data-perm="exportar"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i><span>Imprimir PDF</span></button>
+            <label class="btn secondary file-btn" data-perm="importar"><i class="fa-solid fa-file-arrow-up" aria-hidden="true"></i><span>Cargar CSV / Excel</span><input id="bulkImportInput" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"></label>
           </div>
         </div>
 
@@ -146,7 +193,7 @@
 
       <section id="consumibles" class="panel">
         <div class="panel-head"><div><h2>Gestión de Consumibles</h2><p>Controle existencias y niveles mínimos de alerta.</p></div></div>
-        <form id="consumableForm" class="card form-grid" novalidate>
+        <form id="consumableForm" class="card form-grid" novalidate data-perm="crear">
           <input id="cEditingId" type="hidden">
           <div class="field code-field"><label for="cCodigo">Código / SKU</label><div class="inline-controls"><input id="cCodigo" maxlength="80" autocomplete="off" required><button id="generateConsumableSkuBtn" type="button" class="btn secondary">Generar SKU</button></div></div>
           <div class="field"><label for="cNombre">Nombre</label><input id="cNombre" maxlength="140" required></div>
@@ -180,7 +227,7 @@
       <section id="alertas" class="panel">
         <div class="panel-head">
           <div><h2>Alertas y Requerimientos</h2><p>Consumibles con stock crítico o en nivel preventivo según el mínimo establecido.</p></div>
-          <button id="generateOrderBtn" class="btn primary"><i class="fa-solid fa-file-circle-plus" aria-hidden="true"></i><span>Generar Orden de Requerimiento</span></button>
+          <button id="generateOrderBtn" class="btn primary" data-perm="orden"><i class="fa-solid fa-file-circle-plus" aria-hidden="true"></i><span>Generar Orden de Requerimiento</span></button>
         </div>
         <div class="alert-filter-tabs" role="tablist" aria-label="Filtro de urgencia">
           <button type="button" class="alert-filter active" data-alert-filter="all">Todas</button>
@@ -308,7 +355,7 @@
     <div class="modal lifecycle-modal" role="dialog" aria-modal="true" aria-labelledby="lifecycleTitle">
       <div class="modal-head"><div><h3 id="lifecycleTitle">Hoja de vida</h3><span id="lifecycleCode" class="muted"></span></div><button id="closeLifecycleBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
       <div id="lifecycleFicha" class="lifecycle-ficha"></div>
-      <div class="lifecycle-notes"><h4>Notas de mantenimiento / intervenciones</h4><textarea id="lifecycleNote" rows="3" maxlength="1000" placeholder="Describa la intervención realizada..."></textarea><div class="modal-actions"><button id="saveLifecycleNoteBtn" type="button" class="btn secondary"><i class="fa-solid fa-note-sticky" aria-hidden="true"></i><span>Guardar nota</span></button><button id="printLifecycleBtn" type="button" class="btn primary"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i><span>Ficha técnica PDF</span></button></div></div>
+      <div class="lifecycle-notes" data-perm="hojaVida"><h4>Notas de mantenimiento / intervenciones</h4><textarea id="lifecycleNote" rows="3" maxlength="1000" placeholder="Describa la intervención realizada..."></textarea><div class="modal-actions"><button id="saveLifecycleNoteBtn" type="button" class="btn secondary"><i class="fa-solid fa-note-sticky" aria-hidden="true"></i><span>Guardar nota</span></button><button id="printLifecycleBtn" type="button" class="btn primary"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i><span>Ficha técnica PDF</span></button></div></div>
       <div class="lifecycle-history"><h4>Historial de vida</h4><div id="lifecycleHistory"></div></div>
     </div>
   </div>
@@ -318,6 +365,40 @@
       <div class="modal-head"><h3 id="deleteConfirmTitle">Confirmar eliminación</h3><button id="closeDeleteConfirmBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
       <div class="delete-confirm-content"><p id="deleteConfirmMessage">¿Está seguro de que desea eliminar el artículo?</p></div>
       <div class="modal-actions"><button id="cancelDeleteConfirmBtn" type="button" class="btn secondary"><i class="fa-solid fa-xmark" aria-hidden="true"></i><span>Cancelar</span></button><button id="confirmDeleteBtn" type="button" class="btn danger"><i class="fa-solid fa-trash" aria-hidden="true"></i><span>Confirmar Eliminación</span></button></div>
+    </div>
+  </div>
+
+  <div id="usersModal" class="modal-backdrop" hidden aria-hidden="true">
+    <div class="modal users-modal" role="dialog" aria-modal="true" aria-labelledby="usersTitle">
+      <div class="modal-head"><h3 id="usersTitle">Gestión de usuarios</h3><button id="closeUsersBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
+      <div id="passwordRequestsWrap" class="password-requests" hidden><h4><i class="fa-solid fa-key" aria-hidden="true"></i> Solicitudes de recuperación de contraseña</h4><div id="passwordRequests"></div></div>
+      <form id="userForm" class="form-grid users-form" novalidate>
+        <h4 id="userFormTitle" class="full">Nuevo usuario</h4>
+        <div class="field"><label for="userUsername">Usuario</label><input id="userUsername" maxlength="60" autocomplete="off" required></div>
+        <div class="field"><label for="userFullName">Nombre completo</label><input id="userFullName" maxlength="120" required></div>
+        <div class="field"><label for="userRole">Rol</label><select id="userRole"><option value="Administrador">Administrador (acceso total y gestión de usuarios)</option><option value="Control total" selected>Control total (todo excepto usuarios)</option><option value="Solo lector">Solo lector (solo consultas)</option><option value="Personalizado">Personalizado</option></select></div>
+        <div class="field"><label class="check-label"><input id="userActive" type="checkbox" checked><span>Usuario activo</span></label></div>
+        <div id="userPermField" class="field full" hidden><label>Permisos personalizados</label><div id="userPermChecks" class="perm-checks"></div></div>
+        <div class="field"><label for="userPassword">Contraseña</label><input id="userPassword" type="password" autocomplete="new-password"></div>
+        <div class="field"><label for="userPassword2">Confirmar contraseña</label><input id="userPassword2" type="password" autocomplete="new-password"></div>
+        <div class="field full"><label class="check-label"><input id="userTemporal" type="checkbox" checked><span>Clave temporal (el usuario debe cambiarla en su próximo ingreso). Desmarcar = clave fija.</span></label><small id="userPasswordHint" class="clone-validation"></small></div>
+        <div class="form-actions full"><button id="userSaveBtn" class="btn primary" type="submit"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i><span>Crear usuario</span></button><button id="userResetBtn" class="btn secondary" type="button"><i class="fa-solid fa-eraser" aria-hidden="true"></i><span>Limpiar</span></button></div>
+      </form>
+      <div class="table-card users-table"><div class="table-wrap">
+        <table><thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Clave</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="usersTableBody"></tbody></table>
+      </div><p id="usersCount" class="table-note">0 usuarios</p></div>
+    </div>
+  </div>
+
+  <div id="changePasswordModal" class="modal-backdrop" hidden aria-hidden="true">
+    <div class="modal transfer-modal" role="dialog" aria-modal="true" aria-labelledby="changePasswordTitle">
+      <div class="modal-head"><h3 id="changePasswordTitle">Cambiar contraseña</h3><button id="closeChangePasswordBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
+      <form id="changePasswordForm" class="movement-form" novalidate>
+        <div class="field"><label for="changeCurrent">Contraseña actual</label><input id="changeCurrent" type="password" autocomplete="current-password" required></div>
+        <div class="field"><label for="changeNew">Nueva contraseña (mínimo 8 caracteres)</label><input id="changeNew" type="password" autocomplete="new-password" required></div>
+        <div class="field"><label for="changeNew2">Confirmar nueva contraseña</label><input id="changeNew2" type="password" autocomplete="new-password" required></div>
+        <div class="modal-actions"><button id="cancelChangePasswordBtn" type="button" class="btn secondary"><i class="fa-solid fa-xmark" aria-hidden="true"></i><span>Cancelar</span></button><button type="submit" class="btn primary"><i class="fa-solid fa-key" aria-hidden="true"></i><span>Guardar</span></button></div>
+      </form>
     </div>
   </div>
 

@@ -1571,3 +1571,73 @@ th {
   .lifecycle-event { grid-template-columns: 1fr; }
   .lifecycle-event span { text-align: left; }
 }
+
+/* -------------------------
+   Usuarios, acceso y permisos
+   ------------------------- */
+body.auth-locked .app-shell { display: none; }
+.perm-hidden { display: none !important; }
+.auth-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: linear-gradient(160deg, var(--navy), var(--blue));
+}
+.auth-screen[hidden] { display: none; }
+.auth-card {
+  width: min(400px, 100%);
+  background: var(--card);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 24px;
+  display: grid;
+  gap: 12px;
+}
+.auth-card[hidden] { display: none; }
+.auth-card h2 { margin: 4px 0 0; font-size: 20px; }
+.auth-brand { display: flex; align-items: center; gap: 10px; }
+.auth-brand .brand-mark { background: var(--blue); color: #fff; }
+.auth-brand span { display: block; color: var(--muted); font-size: 12px; }
+.auth-note { margin: 0; color: var(--muted); }
+.auth-link {
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  text-decoration: underline;
+  padding: 4px;
+}
+.user-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.user-card i { font-size: 26px; }
+.user-card strong, .user-card small { display: block; }
+.user-card small { opacity: 0.8; }
+.user-actions { margin-bottom: 8px; }
+.users-modal { width: min(1000px, 100%); }
+.users-form { padding: 16px; }
+.users-form h4, .password-requests h4 { margin: 0; }
+.check-label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.check-label input, .perm-check input { width: auto; }
+.perm-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 14px; }
+.perm-check { display: flex; align-items: center; gap: 8px; font-weight: normal; }
+.users-table { margin: 0 16px 16px; }
+.password-requests {
+  margin: 16px 16px 0;
+  padding: 12px;
+  border: 1px solid #f5d38b;
+  background: #fff8e6;
+  border-radius: 10px;
+  display: grid;
+  gap: 8px;
+}
+.password-request { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
+.password-requests[hidden],
+#userPermField[hidden],
+#userRequestsBadge[hidden] { display: none !important; }

@@ -1,6 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js";
 import { getDatabase, ref, push, set, onValue, remove, update, runTransaction } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-database.js";
 import { getFirestore, collection, doc, setDoc, addDoc, getDocs, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-firestore.js";
+import { initAuth, can } from "./auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyB-FX1wyTkycQ-21QRDf5VWy5p9N__ZNl8",
@@ -56,6 +57,11 @@ function safeInt(value) {
   return Number.isSafeInteger(n) && n >= 0 ? n : null;
 }
 function fmtDateTime(ts) { try { return new Date(ts).toLocaleString("es-CO"); } catch { return ""; } }
+function allowed(perm) {
+  if(can(perm)) return true;
+  showToast("No tiene permiso para realizar esta acción.",true);
+  return false;
+}
 function showToast(message, isError=false) {
   const t=$("toast"); t.textContent=sanitizeText(message,180); t.style.background=isError?"#b91c1c":"#172033";
   t.classList.add("show"); clearTimeout(showToast.timer); showToast.timer=setTimeout(()=>t.classList.remove("show"),2800);
@@ -273,6 +279,7 @@ function hasRealItemChange(before, after) { return itemComparable(before) !== it
 async function guardarItemFirebase(item, existingId="") {
   const clean=toFirebasePayload(item);
   const id=String(existingId || "").trim();
+  if(!can(id ? "editar" : "crear")) throw new Error("No tiene permiso para realizar esta acción.");
 
   if(id) {
     const before=inventario.find(x=>x.idFirebase===id);
@@ -314,6 +321,7 @@ window.guardarItemFirebase = guardarItemFirebase;
 async function eliminarItemFirebase(idFirebase) {
   const item=inventario.find(x=>x.idFirebase===idFirebase);
   if(!item) return;
+  if(!can("eliminar")) throw new Error("No tiene permiso para realizar esta acción.");
   await remove(ref(db,`inventario/${idFirebase}`));
   await registrarMovimiento(item,"Eliminación",item.tipo==="Consumible"?item.stockActual:1);
 }
@@ -350,6 +358,7 @@ function closeMovementModal(){
 async function registrarMovimientoStock(idFirebase, delta, cantidad, destination) {
   const item=inventario.find(entry=>entry.idFirebase===idFirebase);
   if(!item || item.tipo!=="Consumible") throw new Error("El consumible ya no está disponible.");
+  if(!can("movimientos")) throw new Error("No tiene permiso para realizar esta acción.");
 
   const id=idFirebase;
   const itemRef=ref(db,`inventario/${id}`);
@@ -525,19 +534,20 @@ function renderTableRow(item) {
   const stockTd=document.createElement("td");
   if(item.tipo==="Consumible") {
     const wrap=document.createElement("div"); wrap.className="stock-control";
-    wrap.append(button("fa-minus","","minus",()=>openMovementModal(item.idFirebase,-1),"Registrar salida"));
+    if(can("movimientos")) wrap.append(button("fa-minus","","minus",()=>openMovementModal(item.idFirebase,-1),"Registrar salida"));
     wrap.append(makeEl("strong",String(item.stockActual)));
-    wrap.append(button("fa-plus","","plus",()=>openMovementModal(item.idFirebase,1),"Registrar entrada"));
+    if(can("movimientos")) wrap.append(button("fa-plus","","plus",()=>openMovementModal(item.idFirebase,1),"Registrar entrada"));
     stockTd.appendChild(wrap);
   } else stockTd.textContent="—";
   tr.appendChild(stockTd);
   const act=document.createElement("td"); act.className="actions";
-  act.append(button("fa-pen-to-square","Editar","edit",()=>editItem(item)));
-  act.append(button("fa-copy","Copiar","copy",()=>duplicateItem(item),"Duplicar registro"));
-  act.append(button("fa-qrcode","QR","qr",()=>openQrModal(item),"Generar código QR"));
-  if(item.tipo==="Activo") act.append(button("fa-file-medical","Hoja de vida","lifecycle",()=>openLifecycleModal(item),"Abrir hoja de vida"));
-  act.append(button("fa-location-arrow","Traslado","transfer",()=>openTransferModal(item),"Traslado Express"));
-  act.append(button("fa-trash","Eliminar","delete",()=>requestDeleteItem(item)));
+  if(can("editar")) act.append(button("fa-pen-to-square","Editar","edit",()=>editItem(item)));
+  if(can("clonar")) act.append(button("fa-copy","Copiar","copy",()=>duplicateItem(item),"Duplicar registro"));
+  if(can("qr")) act.append(button("fa-qrcode","QR","qr",()=>openQrModal(item),"Generar código QR"));
+  if(item.tipo==="Activo" && can("hojaVida")) act.append(button("fa-file-medical","Hoja de vida","lifecycle",()=>openLifecycleModal(item),"Abrir hoja de vida"));
+  if(can("traslado")) act.append(button("fa-location-arrow","Traslado","transfer",()=>openTransferModal(item),"Traslado Express"));
+  if(can("eliminar")) act.append(button("fa-trash","Eliminar","delete",()=>requestDeleteItem(item)));
+  if(!act.childNodes.length) act.textContent="—";
   tr.appendChild(act);
   return tr;
 }
@@ -630,7 +640,7 @@ function renderCriticals() {
     card.append(head,makeEl("p",`Código: ${item.codigo}`),makeEl("p",`Stock actual: ${item.stockActual}`,"critical-number"),makeEl("p",`Stock mínimo: ${item.stockMinimo}`),makeEl("p",`Prioridad: ${item.prioridadAlerta || "Alta"}`));
     const action=document.createElement("div"); action.className="critical-card-actions";
     const entry=button("fa-plus","Entrada de Stock","plus",()=>openMovementModal(item.idFirebase,1),"Registrar entrada de stock");
-    action.appendChild(entry); card.appendChild(action);
+    if(can("movimientos")) { action.appendChild(entry); card.appendChild(action); }
     box.appendChild(card);
   });
 }
@@ -1030,7 +1040,7 @@ function closeCloneModal(){
 
 async function submitClone(event){
   event.preventDefault();
-  if(!cloneItemContext) return;
+  if(!cloneItemContext || !allowed("clonar")) return;
   const form=event.currentTarget;
   if(!form.checkValidity()){form.reportValidity();return;}
   try {
@@ -1201,7 +1211,7 @@ function closeTransferModal(){
 
 async function submitTransfer(event){
   event.preventDefault();
-  if(!transferItem) return;
+  if(!transferItem || !allowed("traslado")) return;
   const destination=sanitizeText($("transferDestination").value,LIMITS.espacio);
   if(!destination){showToast("Indique el nuevo espacio o ubicación.",true);return;}
   const id=transferItem.idFirebase;
@@ -1246,7 +1256,7 @@ async function loadLifecycleEvents(item){
 }
 
 async function saveLifecycleNote(){
-  if(!lifecycleItem) return;
+  if(!lifecycleItem || !allowed("hojaVida")) return;
   const note=sanitizeText($("lifecycleNote").value,LIMITS.especificaciones);
   if(!note){showToast("Escriba una nota de mantenimiento o intervención.",true);return;}
   try { await addLifecycleEvent(lifecycleItem,"Nota de mantenimiento",note); $("lifecycleNote").value=""; await loadLifecycleEvents(lifecycleItem); showToast("Nota registrada en la hoja de vida."); }
@@ -1520,7 +1530,7 @@ function parseBulkRow(row,index){
 }
 
 async function importBulkFile(file){
-  if(!file) return;
+  if(!file || !allowed("importar")) return;
   try{
     const buffer=await file.arrayBuffer();
     const workbook=XLSX.read(buffer,{type:"array",cellDates:false});
@@ -1549,7 +1559,7 @@ async function importBulkFile(file){
 }
 
 function exportJson(){const data={inventario,movimientos,exportadoEn:Date.now()};const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});saveAs(blob,"backup_inventario.json")}
-async function importJson(file){if(!file)return;try{const data=JSON.parse(await file.text());if(!Array.isArray(data.inventario))throw new Error();if(!confirm("Esto agregará los registros del respaldo a Firebase. ¿Continuar?"))return;for(const raw of data.inventario){const item=normalizeItem(raw);const now=Date.now();const created=Number(item.fechaCreacion)||Number(item.createdAt)||now;const modified=Number(item.fechaUltimaModificacion)||0;item.fechaCreacion=created;item.fechaUltimaModificacion=modified>created?modified:0;item.createdAt=created;item.updatedAt=item.fechaUltimaModificacion||created;delete item.idFirebase;await set(push(inventarioRef),item)}if(Array.isArray(data.movimientos)){for(const m of data.movimientos)await set(push(movimientosRef),{fechaHora:Number(m.fechaHora)||Date.now(),tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)})}showToast("Copia importada correctamente.");}catch{showToast("Archivo JSON inválido.",true)}}
+async function importJson(file){if(!file||!allowed("importar"))return;try{const data=JSON.parse(await file.text());if(!Array.isArray(data.inventario))throw new Error();if(!confirm("Esto agregará los registros del respaldo a Firebase. ¿Continuar?"))return;for(const raw of data.inventario){const item=normalizeItem(raw);const now=Date.now();const created=Number(item.fechaCreacion)||Number(item.createdAt)||now;const modified=Number(item.fechaUltimaModificacion)||0;item.fechaCreacion=created;item.fechaUltimaModificacion=modified>created?modified:0;item.createdAt=created;item.updatedAt=item.fechaUltimaModificacion||created;delete item.idFirebase;await set(push(inventarioRef),item)}if(Array.isArray(data.movimientos)){for(const m of data.movimientos)await set(push(movimientosRef),{fechaHora:Number(m.fechaHora)||Date.now(),tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)})}showToast("Copia importada correctamente.");}catch{showToast("Archivo JSON inválido.",true)}}
 function activateTab(id){document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===id));document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x.dataset.tab===id))}
 
 $("globalSearch").addEventListener("input",()=>{
@@ -1637,6 +1647,7 @@ $("generateOrderBtn").addEventListener("click",openOrder);$("downloadOrderPdfBtn
 $("exportExcelBtn").addEventListener("click",exportExcel);$("exportPdfBtn").addEventListener("click",exportPdf);$("exportJsonBtn").addEventListener("click",exportJson);$("importJsonInput").addEventListener("change",e=>importJson(e.target.files[0]));
 window.addEventListener("beforeunload",()=>{if(scannerRunning&&scanner)scanner.stop().catch(()=>{})});
 
+function startRealtime(){
 onValue(inventarioRef,snapshot=>{const data=snapshot.val()||{};renderizarInventario(Object.entries(data).map(([id,v])=>({...(v||{}),idFirebase:id})));},err=>{setSync("Error de conexión","error");showToast("Firebase rechazó la lectura. Revise las reglas.",true)});
 onValue(movimientosRef,snapshot=>{
   const data=snapshot.val()||{};
@@ -1654,5 +1665,7 @@ try {
     renderMovements();renderInventoryTable();renderGeneralInventoryTable();renderAnalytics();
   },error=>console.warn("No se pudo escuchar movimientos en Firestore.",error));
 } catch(error) { console.warn("No se pudo inicializar el listener de movimientos de Firestore.",error); }
+}
+initAuth(db,startRealtime);
 toggleLocationFields();
 setInterval(()=>{renderInventoryTable();renderGeneralInventoryTable();renderCriticals();},60000);
