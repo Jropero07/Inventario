@@ -212,27 +212,33 @@ function validateCurrentCode(code, editingId="") {
   return true;
 }
 
+function withTimeout(promise, ms=5000) {
+  return Promise.race([promise, new Promise((_,reject)=>setTimeout(()=>reject(new Error("Tiempo de espera agotado en Firestore.")),ms))]);
+}
+
 async function registrarMovimiento(item, tipoAccion, cantidad=0, espacioDestino="") {
+  const qty=safeInt(cantidad);
   const movimiento={
-    idEvento: (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") ? globalThis.crypto.randomUUID() : `evt-${Date.now()}-${Math.random().toString(36).slice(2,10)}`,
     fechaHora:Date.now(),
     tipo:sanitizeText(item.tipo,20),
     codigo:sanitizeText(item.codigo,LIMITS.codigo),
     serial:sanitizeText(item.serial,LIMITS.serial),
     nombre:sanitizeText(item.nombre,LIMITS.nombre),
     tipoAccion:sanitizeText(tipoAccion,40),
-    cantidad:Number.isSafeInteger(cantidad)?Math.max(0,cantidad):0,
+    cantidad:qty===null?0:Math.max(0,qty),
     espacioDestino:sanitizeText(espacioDestino,LIMITS.espacio)
   };
-  const results=await Promise.allSettled([
-    set(push(movimientosRef), movimiento),
-    addDoc(collection(firestore,"movimientos"), movimiento)
-  ]);
-  const ok=results.some(r=>r.status==="fulfilled");
-  if(!ok){
-    console.error("No se pudo guardar el movimiento ni en RTDB ni en Firestore.", results.map(r=>r.reason));
+  const movementRef=push(movimientosRef);
+  // Espejo de auditoría en Firestore: no bloquea ni afecta el resultado de RTDB.
+  withTimeout(setDoc(doc(firestore,"movimientos",movementRef.key),{...movimiento,idEvento:movementRef.key}))
+    .catch(error=>console.warn("Firestore no registró el movimiento; RTDB sigue siendo la fuente principal.",error));
+  try {
+    await set(movementRef, movimiento);
+    return true;
+  } catch(error) {
+    console.error("No se pudo guardar el movimiento en Realtime Database.", error);
+    return false;
   }
-  return ok;
 }
 
 function toFirebasePayload(item) {
@@ -244,7 +250,7 @@ function toFirebasePayload(item) {
 async function syncFirestoreAsset(item,id) {
   try {
     const payload={...toFirebasePayload(item), idFirebase:id, firestoreUpdatedAt:serverTimestamp()};
-    await setDoc(doc(firestore,"inventario",id),payload,{merge:true});
+    await withTimeout(setDoc(doc(firestore,"inventario",id),payload,{merge:true}));
   } catch(error) {
     console.warn("Firestore no disponible para la auditoría; la operación principal se mantiene en RTDB.",error);
   }
@@ -253,7 +259,7 @@ async function syncFirestoreAsset(item,id) {
 async function addLifecycleEvent(item,eventType,details="") {
   if(item.tipo!=="Activo") return;
   try {
-    await addDoc(collection(firestore,"inventario",item.idFirebase,"hojaVida"),{fechaHora:serverTimestamp(),tipo:sanitizeText(eventType,80),detalle:sanitizeText(details,1000),ubicacion:item.espacio||"",responsable:item.responsable||"",estado:item.estado||""});
+    await withTimeout(addDoc(collection(firestore,"inventario",item.idFirebase,"hojaVida"),{fechaHora:serverTimestamp(),tipo:sanitizeText(eventType,80),detalle:sanitizeText(details,1000),ubicacion:item.espacio||"",responsable:item.responsable||"",estado:item.estado||""}));
   } catch(error) { console.warn("No se pudo registrar evento en Hoja de Vida.",error); }
 }
 
@@ -281,14 +287,14 @@ async function guardarItemFirebase(item, existingId="") {
     clean.updatedAt=changed ? now : (Number(before.updatedAt)||created);
     if(!changed) return;
     await update(ref(db,`inventario/${id}`), clean);
-    await syncFirestoreAsset({...clean,idFirebase:id},id);
-    await addLifecycleEvent({...clean,idFirebase:id},"Edición","Cambio real de datos del activo");
     await registrarMovimiento(
       { ...clean, idFirebase:id },
       "Edición",
       Math.abs(clean.tipo==="Consumible" ? (safeInt(clean.stockActual) ?? 0) - (safeInt(before.stockActual) ?? 0) : 0),
       clean.espacio
     );
+    syncFirestoreAsset({...clean,idFirebase:id},id);
+    addLifecycleEvent({...clean,idFirebase:id},"Edición","Cambio real de datos del activo");
     return;
   }
 
@@ -299,9 +305,9 @@ async function guardarItemFirebase(item, existingId="") {
   clean.createdAt=now;
   clean.updatedAt=now;
   await set(nuevo,clean);
-  await syncFirestoreAsset({...clean,idFirebase:nuevo.key},nuevo.key);
-  if(clean.tipo==="Activo") await addLifecycleEvent({...clean,idFirebase:nuevo.key},"Registro de creación","Creación inicial del activo");
   await registrarMovimiento({ ...clean, idFirebase:nuevo.key },"Registro",clean.tipo==="Consumible"?clean.stockActual:1,clean.espacio);
+  syncFirestoreAsset({...clean,idFirebase:nuevo.key},nuevo.key);
+  if(clean.tipo==="Activo") addLifecycleEvent({...clean,idFirebase:nuevo.key},"Registro de creación","Creación inicial del activo");
 }
 window.guardarItemFirebase = guardarItemFirebase;
 
@@ -345,7 +351,8 @@ async function registrarMovimientoStock(idFirebase, delta, cantidad, destination
   const item=inventario.find(entry=>entry.idFirebase===idFirebase);
   if(!item || item.tipo!=="Consumible") throw new Error("El consumible ya no está disponible.");
 
-  const itemRef=ref(db,`inventario/${idFirebase}`);
+  const id=idFirebase;
+  const itemRef=ref(db,`inventario/${id}`);
   let committedSnapshot=null;
   const result=await runTransaction(itemRef,current=>{
     if(current===null) return;
@@ -373,14 +380,14 @@ async function registrarMovimientoStock(idFirebase, delta, cantidad, destination
   const finalStock=safeInt(committedSnapshot?.stockActual);
   if(finalStock===null) throw new Error("Firebase devolvió un stock no válido.");
 
-  await syncFirestoreAsset({...item,stockActual:finalStock,idFirebase:id},id);
-  await addLifecycleEvent({...item,stockActual:finalStock,idFirebase:id},"Ajuste de stock",`${delta>0?"Entrada":"Salida"} de ${cantidad} unidad${cantidad===1?"":"es"}`);
   const movementSaved=await registrarMovimiento(
     { ...item, stockActual:finalStock },
     delta>0 ? "Entrada" : "Salida",
     cantidad,
     destination
   );
+  syncFirestoreAsset({...item,stockActual:finalStock,idFirebase:id},id);
+  addLifecycleEvent({...item,stockActual:finalStock,idFirebase:id},"Ajuste de stock",`${delta>0?"Entrada":"Salida"} de ${cantidad} unidad${cantidad===1?"":"es"}`);
   return { finalStock, movementSaved };
 }
 
@@ -943,7 +950,7 @@ let cloneValidationTimer=null;
 
 async function firestoreInventorySnapshot() {
   try {
-    const snap=await getDocs(collection(firestore,"inventario"));
+    const snap=await withTimeout(getDocs(collection(firestore,"inventario")),3000);
     return snap.docs.map(d=>({idFirebase:d.id,...(d.data()||{})}));
   } catch(error) {
     console.warn("Firestore no disponible para validación avanzada; se usará el estado local.", error);
@@ -1042,8 +1049,8 @@ async function submitClone(event){
     const newRef=push(inventarioRef); const now=Date.now(); clean.fechaCreacion=now; clean.fechaUltimaModificacion=0; clean.createdAt=now; clean.updatedAt=now;
     await set(newRef,toFirebasePayload(clean));
     await registrarMovimiento({...clean,idFirebase:newRef.key},"Registro",isConsumable?clean.stockActual:1,clean.espacio);
-    await syncFirestoreAsset(clean,newRef.key);
-    if(clean.tipo==="Activo") await addLifecycleEvent({...clean,idFirebase:newRef.key},"Registro de clonación","Creación mediante clonación");
+    syncFirestoreAsset(clean,newRef.key);
+    if(clean.tipo==="Activo") addLifecycleEvent({...clean,idFirebase:newRef.key},"Registro de clonación","Creación mediante clonación");
     closeCloneModal(); showToast("Artículo clonado correctamente.");
   } catch(error){ console.error(error); showToast(error.message||"No se pudo clonar el artículo.",true); }
 }
@@ -1203,9 +1210,9 @@ async function submitTransfer(event){
     const now=Date.now();
     await update(itemRef,{espacio:destination,fechaUltimaModificacion:now,updatedAt:now});
     const updated={...transferItem,espacio:destination,fechaUltimaModificacion:now,updatedAt:now};
-    await syncFirestoreAsset(updated,id);
-    await addLifecycleEvent(updated,"Traslado de ubicación",`De ${transferItem.espacio||"sin ubicación"} a ${destination}`);
     await registrarMovimiento(updated,"Edición",0,destination);
+    syncFirestoreAsset(updated,id);
+    addLifecycleEvent(updated,"Traslado de ubicación",`De ${transferItem.espacio||"sin ubicación"} a ${destination}`);
     closeTransferModal();
     showToast(`Ubicación cambiada a ${destination}`);
   }catch(error){
@@ -1633,7 +1640,7 @@ window.addEventListener("beforeunload",()=>{if(scannerRunning&&scanner)scanner.s
 onValue(inventarioRef,snapshot=>{const data=snapshot.val()||{};renderizarInventario(Object.entries(data).map(([id,v])=>({...(v||{}),idFirebase:id})));},err=>{setSync("Error de conexión","error");showToast("Firebase rechazó la lectura. Revise las reglas.",true)});
 onValue(movimientosRef,snapshot=>{
   const data=snapshot.val()||{};
-  const rtdbMovements=Object.values(data).map(m=>({idEvento:sanitizeText(m.idEvento,80),fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)}));
+  const rtdbMovements=Object.entries(data).map(([key,m])=>({idEvento:sanitizeText((m&&m.idEvento)||key,80),fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:safeInt(m.cantidad)??0,espacioDestino:sanitizeText(m.espacioDestino,120)}));
   const firestoreMovements=movimientos.filter(m=>m.__firestore===true);
   movimientos=[...rtdbMovements,...firestoreMovements].filter((m,index,arr)=>!m.idEvento || arr.findIndex(x=>x.idEvento===m.idEvento)===index);
   renderMovements();renderInventoryTable();renderGeneralInventoryTable();renderAnalytics();
@@ -1641,7 +1648,7 @@ onValue(movimientosRef,snapshot=>{
 
 try {
   onSnapshot(collection(firestore,"movimientos"),snapshot=>{
-    const remote=snapshot.docs.map(d=>{const m=d.data()||{}; const rawTs=m.fechaHora; const ts=typeof rawTs==="number"?rawTs:(rawTs?.toMillis?rawTs.toMillis():Date.now()); return {__firestore:true,idEvento:sanitizeText(m.idEvento||d.id,80),fechaHora:ts,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)};});
+    const remote=snapshot.docs.map(d=>{const m=d.data()||{}; const rawTs=m.fechaHora; const ts=typeof rawTs==="number"?rawTs:(rawTs?.toMillis?rawTs.toMillis():Date.now()); return {__firestore:true,idEvento:sanitizeText(m.idEvento||d.id,80),fechaHora:ts,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:safeInt(m.cantidad)??0,espacioDestino:sanitizeText(m.espacioDestino,120)};});
     const rtdb=movimientos.filter(m=>!m.__firestore);
     movimientos=[...rtdb,...remote].filter((m,index,arr)=>!m.idEvento || arr.findIndex(x=>x.idEvento===m.idEvento)===index);
     renderMovements();renderInventoryTable();renderGeneralInventoryTable();renderAnalytics();
