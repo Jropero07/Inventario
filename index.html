@@ -83,14 +83,14 @@
         <div><strong id="userMenuName"></strong><small id="userMenuRole"></small></div>
       </div>
       <div class="sidebar-actions user-actions">
-        <button id="manageUsersBtn" class="btn secondary" type="button" data-perm="usuarios"><i class="fa-solid fa-users-gear" aria-hidden="true"></i><span>Gestión de usuarios</span><span id="userRequestsBadge" class="badge" hidden>0</span></button>
-        <button id="changePasswordBtn" class="btn secondary" type="button"><i class="fa-solid fa-key" aria-hidden="true"></i><span>Cambiar contraseña</span></button>
-        <button id="logoutBtn" class="btn secondary" type="button"><i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i><span>Cerrar sesión</span></button>
+        <button id="manageUsersBtn" class="btn secondary" type="button" data-perm="usuarios" title="Gestión de usuarios" aria-label="Gestión de usuarios"><i class="fa-solid fa-users-gear" aria-hidden="true"></i><span>Gestión de usuarios</span><span id="userRequestsBadge" class="badge" hidden>0</span></button>
+        <button id="changePasswordBtn" class="btn secondary" type="button" title="Cambiar contraseña" aria-label="Cambiar contraseña"><i class="fa-solid fa-key" aria-hidden="true"></i><span>Cambiar contraseña</span></button>
+        <button id="logoutBtn" class="btn secondary" type="button" title="Cerrar sesión" aria-label="Cerrar sesión"><i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i><span>Cerrar sesión</span></button>
       </div>
 
-      <div class="sidebar-actions">
-        <button id="exportJsonBtn" class="btn secondary" data-perm="exportar"><i class="fa-solid fa-file-export" aria-hidden="true"></i><span>Exportar copia JSON</span></button>
-        <label class="btn secondary file-btn" data-perm="importar"><i class="fa-solid fa-file-import" aria-hidden="true"></i><span>Importar copia JSON</span><input id="importJsonInput" type="file" accept="application/json"></label>
+      <div class="sidebar-actions json-actions">
+        <button id="exportJsonBtn" class="btn secondary" data-perm="exportar" title="Exportar copia JSON"><i class="fa-solid fa-file-export" aria-hidden="true"></i><span>Exportar JSON</span></button>
+        <label class="btn secondary file-btn" data-perm="importar"><i class="fa-solid fa-file-import" aria-hidden="true"></i><span>Importar JSON</span><input id="importJsonInput" type="file" accept="application/json"></label>
       </div>
     </aside>
 

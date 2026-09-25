@@ -1641,3 +1641,31 @@ body.auth-locked .app-shell { display: none; }
 .password-requests[hidden],
 #userPermField[hidden],
 #userRequestsBadge[hidden] { display: none !important; }
+
+/* Sidebar compacto: todo visible sin desplazamiento */
+@media (min-width: 721px) {
+  .sidebar {
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    height: 100vh;
+    overflow-y: auto;
+    gap: 14px;
+    padding: 18px 20px;
+  }
+  .tabs { gap: 4px; }
+  .tab { padding: 10px 12px; }
+}
+.user-card { margin-bottom: 0; padding: 8px 12px; }
+.user-actions { margin-bottom: 0; grid-auto-flow: column; grid-auto-columns: 1fr; }
+.user-actions .btn { position: relative; padding: 9px 0; }
+.user-actions .btn > span:not(.badge) { display: none; }
+.user-actions .btn .badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: #d32f2f;
+}
+.json-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.json-actions .btn { padding: 9px 6px; font-size: 12px; }
+.user-actions .perm-hidden { display: none !important; }
