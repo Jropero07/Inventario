@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js";
 import { getDatabase, ref, push, set, onValue, remove, update, runTransaction } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-database.js";
-import { getFirestore, collection, doc, setDoc, addDoc, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-firestore.js";
+import { getFirestore, collection, doc, setDoc, addDoc, getDocs, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyB-FX1wyTkycQ-21QRDf5VWy5p9N__ZNl8",
@@ -214,6 +214,7 @@ function validateCurrentCode(code, editingId="") {
 
 async function registrarMovimiento(item, tipoAccion, cantidad=0, espacioDestino="") {
   const movimiento={
+    idEvento: (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") ? globalThis.crypto.randomUUID() : `evt-${Date.now()}-${Math.random().toString(36).slice(2,10)}`,
     fechaHora:Date.now(),
     tipo:sanitizeText(item.tipo,20),
     codigo:sanitizeText(item.codigo,LIMITS.codigo),
@@ -223,7 +224,15 @@ async function registrarMovimiento(item, tipoAccion, cantidad=0, espacioDestino=
     cantidad:Number.isSafeInteger(cantidad)?Math.max(0,cantidad):0,
     espacioDestino:sanitizeText(espacioDestino,LIMITS.espacio)
   };
-  await set(push(movimientosRef), movimiento);
+  const results=await Promise.allSettled([
+    set(push(movimientosRef), movimiento),
+    addDoc(collection(firestore,"movimientos"), movimiento)
+  ]);
+  const ok=results.some(r=>r.status==="fulfilled");
+  if(!ok){
+    console.error("No se pudo guardar el movimiento ni en RTDB ni en Firestore.", results.map(r=>r.reason));
+  }
+  return ok;
 }
 
 function toFirebasePayload(item) {
@@ -366,13 +375,13 @@ async function registrarMovimientoStock(idFirebase, delta, cantidad, destination
 
   await syncFirestoreAsset({...item,stockActual:finalStock,idFirebase:id},id);
   await addLifecycleEvent({...item,stockActual:finalStock,idFirebase:id},"Ajuste de stock",`${delta>0?"Entrada":"Salida"} de ${cantidad} unidad${cantidad===1?"":"es"}`);
-  await registrarMovimiento(
+  const movementSaved=await registrarMovimiento(
     { ...item, stockActual:finalStock },
     delta>0 ? "Entrada" : "Salida",
     cantidad,
     destination
   );
-  return finalStock;
+  return { finalStock, movementSaved };
 }
 
 async function submitMovement(event){
@@ -390,9 +399,10 @@ async function submitMovement(event){
   if(delta<0 && quantity>item.stockActual){showToast(`No hay suficiente stock. Disponible: ${item.stockActual}.`,true);return;}
 
   try{
-    await registrarMovimientoStock(id,delta,quantity,destination);
+    const result=await registrarMovimientoStock(id,delta,quantity,destination);
     closeMovementModal();
-    showToast(delta>0 ? `Entrada de ${quantity} unidad${quantity===1?"":"es"} registrada.` : `Salida de ${quantity} unidad${quantity===1?"":"es"} registrada.`);
+    const actionText=delta>0 ? `Entrada de ${quantity} unidad${quantity===1?"":"es"} registrada.` : `Salida de ${quantity} unidad${quantity===1?"":"es"} registrada.`;
+    showToast(result.movementSaved ? actionText : `${actionText} La auditoría de movimientos no pudo sincronizarse.` , !result.movementSaved);
   }catch(error){
     console.error("Error al registrar movimiento:",error);
     showToast(error.message || "Firebase no permitió actualizar el stock. Revise las reglas de la base de datos.",true);
@@ -972,9 +982,10 @@ async function validateCloneUniqueness() {
 async function openCloneModal(item) {
   cloneItemContext=item;
   const isConsumable=item.tipo==="Consumible";
+  const localSuggestedSku=nextAvailableSku(item.tipo,item.categoria);
   $("cloneModalTitle").textContent=`Clonar ${item.tipo.toLowerCase()}`;
   $("cloneTipo").value=item.tipo;
-  $("cloneCodigo").value=await nextAvailableSkuAsync(item.tipo,item.categoria);
+  $("cloneCodigo").value=localSuggestedSku;
   $("cloneNombre").value=item.nombre||"";
   $("cloneCategoria").value=item.categoria||"";
   $("cloneMarca").value=item.marca||"";
@@ -995,6 +1006,14 @@ async function openCloneModal(item) {
   $("cloneSerialStatus").textContent="";
   $("cloneModal").hidden=false; $("cloneModal").setAttribute("aria-hidden","false");
   setTimeout(()=>$("cloneCodigo").focus(),50);
+  // El modal abre inmediatamente. La consulta remota solo refina la sugerencia si el usuario aún no la cambió.
+  const contextAtOpen=item;
+  nextAvailableSkuAsync(item.tipo,item.categoria).then(remoteSku=>{
+    if(cloneItemContext===contextAtOpen && $("cloneCodigo").value===localSuggestedSku){
+      $("cloneCodigo").value=remoteSku;
+      $("cloneSkuStatus").textContent="SKU sugerido";
+    }
+  }).catch(error=>console.warn("No se pudo consultar el correlativo remoto; se conserva la sugerencia local.",error));
 }
 
 function closeCloneModal(){
@@ -1612,6 +1631,21 @@ $("exportExcelBtn").addEventListener("click",exportExcel);$("exportPdfBtn").addE
 window.addEventListener("beforeunload",()=>{if(scannerRunning&&scanner)scanner.stop().catch(()=>{})});
 
 onValue(inventarioRef,snapshot=>{const data=snapshot.val()||{};renderizarInventario(Object.entries(data).map(([id,v])=>({...(v||{}),idFirebase:id})));},err=>{setSync("Error de conexión","error");showToast("Firebase rechazó la lectura. Revise las reglas.",true)});
-onValue(movimientosRef,snapshot=>{const data=snapshot.val()||{};movimientos=Object.values(data).map(m=>({fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)}));renderMovements();renderInventoryTable();renderGeneralInventoryTable();renderAnalytics();},()=>setSync("Error de movimientos","error"));
+onValue(movimientosRef,snapshot=>{
+  const data=snapshot.val()||{};
+  const rtdbMovements=Object.values(data).map(m=>({idEvento:sanitizeText(m.idEvento,80),fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)}));
+  const firestoreMovements=movimientos.filter(m=>m.__firestore===true);
+  movimientos=[...rtdbMovements,...firestoreMovements].filter((m,index,arr)=>!m.idEvento || arr.findIndex(x=>x.idEvento===m.idEvento)===index);
+  renderMovements();renderInventoryTable();renderGeneralInventoryTable();renderAnalytics();
+},()=>setSync("Error de movimientos","error"));
+
+try {
+  onSnapshot(collection(firestore,"movimientos"),snapshot=>{
+    const remote=snapshot.docs.map(d=>{const m=d.data()||{}; const rawTs=m.fechaHora; const ts=typeof rawTs==="number"?rawTs:(rawTs?.toMillis?rawTs.toMillis():Date.now()); return {__firestore:true,idEvento:sanitizeText(m.idEvento||d.id,80),fechaHora:ts,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)};});
+    const rtdb=movimientos.filter(m=>!m.__firestore);
+    movimientos=[...rtdb,...remote].filter((m,index,arr)=>!m.idEvento || arr.findIndex(x=>x.idEvento===m.idEvento)===index);
+    renderMovements();renderInventoryTable();renderGeneralInventoryTable();renderAnalytics();
+  },error=>console.warn("No se pudo escuchar movimientos en Firestore.",error));
+} catch(error) { console.warn("No se pudo inicializar el listener de movimientos de Firestore.",error); }
 toggleLocationFields();
 setInterval(()=>{renderInventoryTable();renderGeneralInventoryTable();renderCriticals();},60000);
