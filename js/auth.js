@@ -21,7 +21,7 @@ export const PERMISOS = {
 export const ROLES = ["Administrador", "Control total", "Solo lector", "Personalizado"];
 
 const SESSION_KEY = "invti_session";
-const MIN_PASSWORD = 8;
+const MIN_PASSWORD = 4;
 const PBKDF2_ITERATIONS = 100000;
 
 let db = null;

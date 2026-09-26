@@ -33,7 +33,7 @@
       <p class="auth-note">No hay usuarios registrados. Cree el primer usuario Administrador.</p>
       <div class="field"><label for="setupUser">Usuario</label><input id="setupUser" autocomplete="username" maxlength="60" required></div>
       <div class="field"><label for="setupName">Nombre completo</label><input id="setupName" maxlength="120" required></div>
-      <div class="field"><label for="setupPassword">Contraseña (mínimo 8 caracteres)</label><input id="setupPassword" type="password" autocomplete="new-password" required></div>
+      <div class="field"><label for="setupPassword">Contraseña (mínimo 4 caracteres)</label><input id="setupPassword" type="password" autocomplete="new-password" required></div>
       <div class="field"><label for="setupPassword2">Confirmar contraseña</label><input id="setupPassword2" type="password" autocomplete="new-password" required></div>
       <button class="btn primary" type="submit"><i class="fa-solid fa-user-shield" aria-hidden="true"></i><span>Crear Administrador</span></button>
     </form>
@@ -48,7 +48,7 @@
     <form id="forceChangeCard" class="auth-card" novalidate hidden>
       <h2>Cambiar clave temporal</h2>
       <p id="forceChangeInfo" class="auth-note"></p>
-      <div class="field"><label for="forcePassword">Nueva contraseña (mínimo 8 caracteres)</label><input id="forcePassword" type="password" autocomplete="new-password" required></div>
+      <div class="field"><label for="forcePassword">Nueva contraseña (mínimo 4 caracteres)</label><input id="forcePassword" type="password" autocomplete="new-password" required></div>
       <div class="field"><label for="forcePassword2">Confirmar nueva contraseña</label><input id="forcePassword2" type="password" autocomplete="new-password" required></div>
       <button class="btn primary" type="submit"><i class="fa-solid fa-key" aria-hidden="true"></i><span>Guardar y continuar</span></button>
       <button id="forceLogoutBtn" class="auth-link" type="button">Cancelar y salir</button>
@@ -395,7 +395,7 @@
       <div class="modal-head"><h3 id="changePasswordTitle">Cambiar contraseña</h3><button id="closeChangePasswordBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
       <form id="changePasswordForm" class="movement-form" novalidate>
         <div class="field"><label for="changeCurrent">Contraseña actual</label><input id="changeCurrent" type="password" autocomplete="current-password" required></div>
-        <div class="field"><label for="changeNew">Nueva contraseña (mínimo 8 caracteres)</label><input id="changeNew" type="password" autocomplete="new-password" required></div>
+        <div class="field"><label for="changeNew">Nueva contraseña (mínimo 4 caracteres)</label><input id="changeNew" type="password" autocomplete="new-password" required></div>
         <div class="field"><label for="changeNew2">Confirmar nueva contraseña</label><input id="changeNew2" type="password" autocomplete="new-password" required></div>
         <div class="modal-actions"><button id="cancelChangePasswordBtn" type="button" class="btn secondary"><i class="fa-solid fa-xmark" aria-hidden="true"></i><span>Cancelar</span></button><button type="submit" class="btn primary"><i class="fa-solid fa-key" aria-hidden="true"></i><span>Guardar</span></button></div>
       </form>
