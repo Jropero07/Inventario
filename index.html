@@ -71,6 +71,7 @@
         <button class="tab" type="button" data-tab="general"><i class="fa-solid fa-list-check" aria-hidden="true"></i><span class="tab-label">Inventario General</span></button>
         <button class="tab" type="button" data-tab="alertas"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span class="tab-label">Alertas</span><span id="criticalBadge" class="badge">0</span></button>
         <button class="tab" type="button" data-tab="movimientos"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i><span class="tab-label">Historial de Movimientos</span></button>
+        <button class="tab" type="button" data-tab="papelera" data-perm="eliminar"><i class="fa-solid fa-trash-can" aria-hidden="true"></i><span class="tab-label">Papelera</span><span id="trashBadge" class="badge">0</span></button>
       </nav>
 
       <div class="sync-card">
@@ -246,14 +247,25 @@
           <input id="movementDateFrom" type="date" title="Fecha desde">
           <input id="movementDateTo" type="date" title="Fecha hasta">
           <select id="movementType"><option value="">Todos los tipos</option><option value="Activo">Activo</option><option value="Consumible">Consumible</option></select>
-          <select id="movementAction"><option value="">Todas las acciones</option><option value="Entrada">Entrada</option><option value="Salida">Salida</option><option value="Registro">Registro</option><option value="Edición">Edición</option><option value="Eliminación">Eliminación</option></select>
+          <select id="movementAction"><option value="">Todas las acciones</option><option value="Entrada">Entrada</option><option value="Salida">Salida</option><option value="Registro">Registro</option><option value="Edición">Edición</option><option value="Eliminación">Eliminación</option><option value="Restauración">Restauración</option></select>
           <input id="movementSearchDestination" type="search" placeholder="Buscar destino / lugar...">
+          <input id="movementSearchUser" type="search" placeholder="Buscar por usuario...">
           <button id="clearMovementFiltersBtn" class="btn secondary" type="button"><i class="fa-solid fa-eraser" aria-hidden="true"></i><span>Limpiar filtros</span></button>
         </div>
         <div class="table-card"><div class="table-wrap">
-          <table><thead><tr><th>Fecha / Hora</th><th>Tipo</th><th>SKU / Código</th><th>Serial</th><th>Nombre</th><th>Acción</th><th>Cantidad</th><th>Espacio / Destino</th></tr></thead>
+          <table><thead><tr><th>Fecha / Hora</th><th>Tipo</th><th>SKU / Código</th><th>Serial</th><th>Nombre</th><th>Acción</th><th>Cantidad</th><th>Espacio / Destino</th><th>Usuario</th></tr></thead>
           <tbody id="movementTableBody"></tbody></table>
         </div><p id="movementCount" class="table-note">0 movimientos</p></div>
+      </section>
+      <section id="papelera" class="panel">
+        <div class="panel-head">
+          <div><h2>Papelera</h2><p>Registros eliminados. Pueden restaurarse con todos sus datos.</p></div>
+          <button id="emptyTrashBtn" class="btn danger" type="button" data-perm="usuarios"><i class="fa-solid fa-trash" aria-hidden="true"></i><span>Vaciar papelera</span></button>
+        </div>
+        <div class="table-card"><div class="table-wrap">
+          <table><thead><tr><th>Tipo</th><th>Código</th><th>Nombre</th><th>Categoría</th><th>Eliminado por</th><th>Fecha de eliminación</th><th>Acciones</th></tr></thead>
+          <tbody id="trashTableBody"></tbody></table>
+        </div><p id="trashCount" class="table-note">0 registros en la papelera</p></div>
       </section>
     </main>
   </div>
@@ -387,6 +399,12 @@
       <div class="table-card users-table"><div class="table-wrap">
         <table><thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Clave</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="usersTableBody"></tbody></table>
       </div><p id="usersCount" class="table-note">0 usuarios</p></div>
+      <div class="access-log">
+        <div class="access-log-head"><h4><i class="fa-solid fa-list-ul" aria-hidden="true"></i> Bitácora de accesos</h4><input id="accessLogSearch" type="search" placeholder="Filtrar por usuario o evento..."></div>
+        <div class="table-card"><div class="table-wrap access-log-wrap">
+          <table><thead><tr><th>Fecha / Hora</th><th>Usuario</th><th>Evento</th><th>Detalle</th></tr></thead><tbody id="accessLogBody"></tbody></table>
+        </div><p id="accessLogCount" class="table-note">0 eventos</p></div>
+      </div>
     </div>
   </div>
 

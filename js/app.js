@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js";
 import { getDatabase, ref, push, set, onValue, remove, update, runTransaction } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-database.js";
 import { getFirestore, collection, doc, setDoc, addDoc, getDocs, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-firestore.js";
-import { initAuth, can } from "./auth.js";
+import { initAuth, can, getCurrentUser } from "./auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyB-FX1wyTkycQ-21QRDf5VWy5p9N__ZNl8",
@@ -18,6 +18,8 @@ const db = getDatabase(app);
 const firestore = getFirestore(app);
 const inventarioRef = ref(db, "inventario");
 const movimientosRef = ref(db, "movimientos");
+const papeleraRef = ref(db, "papelera");
+let papelera = [];
 
 const $ = id => document.getElementById(id);
 let inventario = [];
@@ -57,6 +59,10 @@ function safeInt(value) {
   return Number.isSafeInteger(n) && n >= 0 ? n : null;
 }
 function fmtDateTime(ts) { try { return new Date(ts).toLocaleString("es-CO"); } catch { return ""; } }
+function currentUserName() {
+  const u=getCurrentUser();
+  return u ? sanitizeText(u.usuario,60) : "";
+}
 function allowed(perm) {
   if(can(perm)) return true;
   showToast("No tiene permiso para realizar esta acción.",true);
@@ -232,7 +238,8 @@ async function registrarMovimiento(item, tipoAccion, cantidad=0, espacioDestino=
     nombre:sanitizeText(item.nombre,LIMITS.nombre),
     tipoAccion:sanitizeText(tipoAccion,40),
     cantidad:qty===null?0:Math.max(0,qty),
-    espacioDestino:sanitizeText(espacioDestino,LIMITS.espacio)
+    espacioDestino:sanitizeText(espacioDestino,LIMITS.espacio),
+    usuario:currentUserName()
   };
   const movementRef=push(movimientosRef);
   // Espejo de auditoría en Firestore: no bloquea ni afecta el resultado de RTDB.
@@ -265,7 +272,7 @@ async function syncFirestoreAsset(item,id) {
 async function addLifecycleEvent(item,eventType,details="") {
   if(item.tipo!=="Activo") return;
   try {
-    await withTimeout(addDoc(collection(firestore,"inventario",item.idFirebase,"hojaVida"),{fechaHora:serverTimestamp(),tipo:sanitizeText(eventType,80),detalle:sanitizeText(details,1000),ubicacion:item.espacio||"",responsable:item.responsable||"",estado:item.estado||""}));
+    await withTimeout(addDoc(collection(firestore,"inventario",item.idFirebase,"hojaVida"),{fechaHora:serverTimestamp(),tipo:sanitizeText(eventType,80),detalle:sanitizeText(details,1000),ubicacion:item.espacio||"",responsable:item.responsable||"",estado:item.estado||"",usuario:currentUserName()}));
   } catch(error) { console.warn("No se pudo registrar evento en Hoja de Vida.",error); }
 }
 
@@ -322,10 +329,60 @@ async function eliminarItemFirebase(idFirebase) {
   const item=inventario.find(x=>x.idFirebase===idFirebase);
   if(!item) return;
   if(!can("eliminar")) throw new Error("No tiene permiso para realizar esta acción.");
+  const {idFirebase:_omit,...data}=item;
+  await set(ref(db,`papelera/${idFirebase}`),{...toFirebasePayload(data),eliminadoPor:currentUserName(),fechaEliminacion:Date.now()});
   await remove(ref(db,`inventario/${idFirebase}`));
   await registrarMovimiento(item,"Eliminación",item.tipo==="Consumible"?item.stockActual:1);
 }
 window.eliminarItemFirebase=eliminarItemFirebase;
+
+async function restaurarItem(id) {
+  if(!allowed("eliminar")) return;
+  const entry=papelera.find(x=>x.idFirebase===id);
+  if(!entry) return;
+  if(!validateUniqueCode(entry.codigo,"")){showToast(`No se puede restaurar: el Código / SKU ${entry.codigo} ya está en uso.`,true);return;}
+  if(entry.serial && findDuplicateSerial(entry.serial,"")){showToast(`No se puede restaurar: el serial ${entry.serial} ya está en uso.`,true);return;}
+  try {
+    const {idFirebase:_omit,eliminadoPor,fechaEliminacion,...data}=entry;
+    const restored=toFirebasePayload({...data,fechaUltimaModificacion:Date.now(),updatedAt:Date.now()});
+    await set(ref(db,`inventario/${id}`),restored);
+    await remove(ref(db,`papelera/${id}`));
+    await registrarMovimiento({...restored,idFirebase:id},"Restauración",restored.tipo==="Consumible"?restored.stockActual:1,restored.espacio);
+    addLifecycleEvent({...restored,idFirebase:id},"Restauración","Registro restaurado desde la papelera");
+    showToast(`${restored.nombre} restaurado correctamente.`);
+  } catch(error) { console.error(error); showToast("No se pudo restaurar el registro.",true); }
+}
+
+async function eliminarDefinitivo(id) {
+  if(!allowed("usuarios")) return;
+  const entry=papelera.find(x=>x.idFirebase===id);
+  if(!entry || !confirm(`¿Eliminar definitivamente ${entry.nombre}? Esta acción no se puede deshacer.`)) return;
+  try { await remove(ref(db,`papelera/${id}`)); showToast("Registro eliminado definitivamente."); }
+  catch(error) { console.error(error); showToast("No se pudo eliminar el registro.",true); }
+}
+
+async function vaciarPapelera() {
+  if(!allowed("usuarios") || !papelera.length) return;
+  if(!confirm(`¿Vaciar la papelera? Se eliminarán definitivamente ${papelera.length} registros.`)) return;
+  try { await remove(papeleraRef); showToast("Papelera vaciada."); }
+  catch(error) { console.error(error); showToast("No se pudo vaciar la papelera.",true); }
+}
+
+function renderPapelera() {
+  const body=$("trashTableBody"); if(!body) return;
+  body.replaceChildren();
+  const data=[...papelera].sort((a,b)=>(b.fechaEliminacion||0)-(a.fechaEliminacion||0));
+  data.forEach(item=>{
+    const tr=document.createElement("tr");
+    addCell(tr,item.tipo);addCell(tr,item.codigo);addCell(tr,item.nombre);addCell(tr,item.categoria);addCell(tr,item.eliminadoPor||"—");addCell(tr,fmtDateTime(item.fechaEliminacion));
+    const act=document.createElement("td"); act.className="actions";
+    act.append(button("fa-rotate-left","Restaurar","edit",()=>restaurarItem(item.idFirebase),"Restaurar registro"));
+    if(can("usuarios")) act.append(button("fa-trash","Eliminar definitivamente","delete",()=>eliminarDefinitivo(item.idFirebase),"Eliminar definitivamente"));
+    tr.appendChild(act); body.appendChild(tr);
+  });
+  $("trashCount").textContent=`${data.length} registros en la papelera`;
+  $("trashBadge").textContent=String(data.length);
+}
 
 function openMovementModal(idFirebase, delta) {
   const id=String(idFirebase || "").trim();
@@ -516,7 +573,7 @@ async function confirmDeleteItem() {
     selectedAlertIds.delete(id);
     orderQuantities.delete(id);
     closeDeleteConfirm();
-    showToast("Artículo eliminado correctamente.");
+    showToast("Artículo enviado a la papelera.");
   } catch(error) {
     console.error("Error al eliminar:",error);
     showToast("No se pudo eliminar el artículo.",true);
@@ -734,6 +791,7 @@ function filteredMovements() {
   const type=$("movementType").value;
   const action=$("movementAction").value;
   const destination=sanitizeText($("movementSearchDestination").value,120).toLowerCase();
+  const userFilter=sanitizeText($("movementSearchUser").value,60).toLowerCase();
   const fromTs=from ? new Date(`${from}T00:00:00`).getTime() : null;
   const toTs=to ? new Date(`${to}T23:59:59.999`).getTime() : null;
   return movimientos.filter(m=>{
@@ -745,14 +803,15 @@ function filteredMovements() {
     const hayType=!type || String(m.tipo||"")===type;
     const hayAction=!action || movementActionCategory(m)===action;
     const hayDestination=!destination || String(m.espacioDestino||"").toLowerCase().includes(destination);
-    return hayName&&haySku&&haySerial&&hayDate&&hayType&&hayAction&&hayDestination;
+    const hayUser=!userFilter || String(m.usuario||"").toLowerCase().includes(userFilter);
+    return hayName&&haySku&&haySerial&&hayDate&&hayType&&hayAction&&hayDestination&&hayUser;
   });
 }
 
 function renderMovements() {
   const body=$("movementTableBody");body.replaceChildren();
   const data=filteredMovements().sort((a,b)=>(b.fechaHora||0)-(a.fechaHora||0));
-  data.forEach(m=>{const tr=document.createElement("tr");addCell(tr,fmtDateTime(m.fechaHora));addCell(tr,m.tipo||"—");addCell(tr,m.codigo);addCell(tr,m.serial||"—");addCell(tr,m.nombre);addCell(tr,m.tipoAccion);addCell(tr,String(m.cantidad));addCell(tr,m.espacioDestino||"—");body.appendChild(tr)});
+  data.forEach(m=>{const tr=document.createElement("tr");addCell(tr,fmtDateTime(m.fechaHora));addCell(tr,m.tipo||"—");addCell(tr,m.codigo);addCell(tr,m.serial||"—");addCell(tr,m.nombre);addCell(tr,m.tipoAccion);addCell(tr,String(m.cantidad));addCell(tr,m.espacioDestino||"—");addCell(tr,m.usuario||"—");body.appendChild(tr)});
   $("movementCount").textContent=`${data.length} movimientos`;
 }
 
@@ -1550,7 +1609,7 @@ async function importBulkFile(file){
     const updates={}; const now=Date.now();
     for(const item of imported){
       const itemRef=push(inventarioRef); const clean=toFirebasePayload({...item,fechaCreacion:now,fechaUltimaModificacion:0,createdAt:now,updatedAt:now}); updates[`inventario/${itemRef.key}`]=clean;
-      const movementRef=push(movimientosRef); updates[`movimientos/${movementRef.key}`]={fechaHora:now,tipo:item.tipo,codigo:item.codigo,serial:item.serial,nombre:item.nombre,tipoAccion:"Registro",cantidad:item.tipo==="Consumible"?item.stockActual:1,espacioDestino:item.espacio};
+      const movementRef=push(movimientosRef); updates[`movimientos/${movementRef.key}`]={fechaHora:now,tipo:item.tipo,codigo:item.codigo,serial:item.serial,nombre:item.nombre,tipoAccion:"Registro",cantidad:item.tipo==="Consumible"?item.stockActual:1,espacioDestino:item.espacio,usuario:currentUserName()};
     }
     await update(ref(db),updates);
     showToast(`${imported.length} registros cargados correctamente.`);
@@ -1570,9 +1629,9 @@ $("globalSearch").addEventListener("input",()=>{
 
 document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>activateTab(b.dataset.tab)));
 ["generalSearch","filterType","filterStatus","filterCategory","filterSpace"].forEach(id=>$(id).addEventListener("input",renderGeneralInventoryTable));
-["movementSearchName","movementSearchSku","movementSearchSerial","movementDateFrom","movementDateTo","movementType","movementAction","movementSearchDestination"].forEach(id=>$(id).addEventListener("input",renderMovements));
+["movementSearchName","movementSearchSku","movementSearchSerial","movementDateFrom","movementDateTo","movementType","movementAction","movementSearchDestination","movementSearchUser"].forEach(id=>$(id).addEventListener("input",renderMovements));
 $("clearFiltersBtn").addEventListener("click",()=>{$("generalSearch").value="";$("filterType").value="";$("filterStatus").value="";$("filterCategory").value="";$("filterSpace").value="";renderGeneralInventoryTable()});
-$("clearMovementFiltersBtn").addEventListener("click",()=>{["movementSearchName","movementSearchSku","movementSearchSerial","movementDateFrom","movementDateTo","movementType","movementAction","movementSearchDestination"].forEach(id=>$(id).value="");renderMovements()});
+$("clearMovementFiltersBtn").addEventListener("click",()=>{["movementSearchName","movementSearchSku","movementSearchSerial","movementDateFrom","movementDateTo","movementType","movementAction","movementSearchDestination","movementSearchUser"].forEach(id=>$(id).value="");renderMovements()});
 $("estado").addEventListener("change",toggleLocationFields);$("generateSkuBtn").addEventListener("click",generateSku);$("generateConsumableSkuBtn").addEventListener("click",generateConsumableSku);$("scanBtn").addEventListener("click",()=>startScanner("codigo"));$("generalScanBtn").addEventListener("click",()=>startScanner("generalSearch",()=>renderGeneralInventoryTable()));$("closeScannerBtn").addEventListener("click",stopScanner);
 $("scannerModal").addEventListener("click",e=>{if(e.target===$("scannerModal"))stopScanner()});$("qrModal").addEventListener("click",e=>{if(e.target===$("qrModal"))closeQrModal()});$("closeQrBtn").addEventListener("click",closeQrModal);$("cancelQrBtn").addEventListener("click",closeQrModal);$("downloadQrBtn").addEventListener("click",downloadQrPng);$("orderModal").addEventListener("click",e=>{if(e.target===$("orderModal"))closeOrder()});$("closeOrderModal").addEventListener("click",closeOrder);
 $("movementModal").addEventListener("click",e=>{if(e.target===$("movementModal"))closeMovementModal()});$("closeMovementModal").addEventListener("click",closeMovementModal);$("cancelMovementBtn").addEventListener("click",closeMovementModal);$("movementForm").addEventListener("submit",submitMovement);
@@ -1648,10 +1707,11 @@ $("exportExcelBtn").addEventListener("click",exportExcel);$("exportPdfBtn").addE
 window.addEventListener("beforeunload",()=>{if(scannerRunning&&scanner)scanner.stop().catch(()=>{})});
 
 function startRealtime(){
+startTrashListener();
 onValue(inventarioRef,snapshot=>{const data=snapshot.val()||{};renderizarInventario(Object.entries(data).map(([id,v])=>({...(v||{}),idFirebase:id})));},err=>{setSync("Error de conexión","error");showToast("Firebase rechazó la lectura. Revise las reglas.",true)});
 onValue(movimientosRef,snapshot=>{
   const data=snapshot.val()||{};
-  const rtdbMovements=Object.entries(data).map(([key,m])=>({idEvento:sanitizeText((m&&m.idEvento)||key,80),fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:safeInt(m.cantidad)??0,espacioDestino:sanitizeText(m.espacioDestino,120)}));
+  const rtdbMovements=Object.entries(data).map(([key,m])=>({idEvento:sanitizeText((m&&m.idEvento)||key,80),fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:safeInt(m.cantidad)??0,espacioDestino:sanitizeText(m.espacioDestino,120),usuario:sanitizeText(m.usuario,60)}));
   const firestoreMovements=movimientos.filter(m=>m.__firestore===true);
   movimientos=[...rtdbMovements,...firestoreMovements].filter((m,index,arr)=>!m.idEvento || arr.findIndex(x=>x.idEvento===m.idEvento)===index);
   renderMovements();renderInventoryTable();renderGeneralInventoryTable();renderAnalytics();
@@ -1659,7 +1719,7 @@ onValue(movimientosRef,snapshot=>{
 
 try {
   onSnapshot(collection(firestore,"movimientos"),snapshot=>{
-    const remote=snapshot.docs.map(d=>{const m=d.data()||{}; const rawTs=m.fechaHora; const ts=typeof rawTs==="number"?rawTs:(rawTs?.toMillis?rawTs.toMillis():Date.now()); return {__firestore:true,idEvento:sanitizeText(m.idEvento||d.id,80),fechaHora:ts,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:safeInt(m.cantidad)??0,espacioDestino:sanitizeText(m.espacioDestino,120)};});
+    const remote=snapshot.docs.map(d=>{const m=d.data()||{}; const rawTs=m.fechaHora; const ts=typeof rawTs==="number"?rawTs:(rawTs?.toMillis?rawTs.toMillis():Date.now()); return {__firestore:true,idEvento:sanitizeText(m.idEvento||d.id,80),fechaHora:ts,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:safeInt(m.cantidad)??0,espacioDestino:sanitizeText(m.espacioDestino,120),usuario:sanitizeText(m.usuario,60)};});
     const rtdb=movimientos.filter(m=>!m.__firestore);
     movimientos=[...rtdb,...remote].filter((m,index,arr)=>!m.idEvento || arr.findIndex(x=>x.idEvento===m.idEvento)===index);
     renderMovements();renderInventoryTable();renderGeneralInventoryTable();renderAnalytics();
@@ -1667,5 +1727,10 @@ try {
 } catch(error) { console.warn("No se pudo inicializar el listener de movimientos de Firestore.",error); }
 }
 initAuth(db,startRealtime);
+function startTrashListener(){
+  if(!can("eliminar")) return;
+  onValue(papeleraRef,snapshot=>{const data=snapshot.val()||{};papelera=Object.entries(data).map(([id,v])=>({...normalizeItem({...(v||{}),idFirebase:id}),eliminadoPor:sanitizeText(v?.eliminadoPor,60),fechaEliminacion:Number(v?.fechaEliminacion)||0}));renderPapelera();},error=>console.warn("No se pudo leer la papelera.",error));
+}
+$("emptyTrashBtn").addEventListener("click",vaciarPapelera);
 toggleLocationFields();
 setInterval(()=>{renderInventoryTable();renderGeneralInventoryTable();renderCriticals();},60000);

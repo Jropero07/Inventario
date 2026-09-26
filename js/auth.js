@@ -3,7 +3,7 @@
    Usuarios propios almacenados en Firebase RTDB: usuarios/
    Solicitudes de recuperación de clave: solicitudesClave/
    ========================================================= */
-import { ref, get, set, update, push, remove, onValue } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-database.js";
+import { ref, get, set, update, push, remove, onValue, query, limitToLast } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-database.js";
 
 export const PERMISOS = {
   crear: "Crear registros (Guardar / Generar SKU)",
@@ -23,6 +23,10 @@ export const ROLES = ["Administrador", "Control total", "Solo lector", "Personal
 const SESSION_KEY = "invti_session";
 const MIN_PASSWORD = 4;
 const PBKDF2_ITERATIONS = 100000;
+const MAX_INTENTOS = 5;
+const BLOQUEO_TEMPORAL_MS = 15 * 60 * 1000;
+const INACTIVIDAD_MS = 5 * 60 * 1000;
+const IDLE_FLAG = "invti_idle_logout";
 
 let db = null;
 let currentUser = null;
@@ -59,6 +63,32 @@ function passwordError(pass, confirm) {
   if (pass.length < MIN_PASSWORD) return `La contraseña debe tener al menos ${MIN_PASSWORD} caracteres.`;
   if (pass !== confirm) return "Las contraseñas no coinciden.";
   return "";
+}
+
+/* ---------- Bitácora de accesos ---------- */
+function logAccess(usuario, evento, detalle = "") {
+  try {
+    return set(push(ref(db, "accesos")), { fecha: Date.now(), usuario: normUser(usuario) || "—", evento: clean(evento, 40), detalle: clean(detalle, 200), navegador: clean(navigator.userAgent, 160) })
+      .catch(error => console.warn("No se pudo registrar el acceso.", error));
+  } catch (error) { console.warn(error); return Promise.resolve(); }
+}
+
+/* ---------- Cierre por inactividad ---------- */
+let idleTimer = null;
+let lastActivity = Date.now();
+function markActivity() { lastActivity = Date.now(); }
+function startIdleWatch() {
+  if (idleTimer) return;
+  lastActivity = Date.now();
+  ["mousemove", "mousedown", "keydown", "scroll", "touchstart", "wheel"].forEach(ev => document.addEventListener(ev, markActivity, { passive: true, capture: true }));
+  idleTimer = setInterval(async () => {
+    if (!currentUser || Date.now() - lastActivity < INACTIVIDAD_MS) return;
+    clearInterval(idleTimer); idleTimer = null;
+    await Promise.race([logAccess(currentUser.usuario, "Cierre por inactividad", "5 minutos sin actividad"), new Promise(res => setTimeout(res, 1500))]);
+    try { sessionStorage.setItem(IDLE_FLAG, "1"); } catch {}
+    clearSession();
+    location.reload();
+  }, 10000);
 }
 
 /* ---------- Permisos ---------- */
@@ -107,6 +137,7 @@ function enterApp(id, user) {
   applyPermissions();
   if (onReadyCallback) { const cb = onReadyCallback; onReadyCallback = null; cb(currentUser); }
   if (can("usuarios")) listenAdminData();
+  startIdleWatch();
 }
 
 async function loadUsers() {
@@ -133,11 +164,38 @@ async function submitLogin(e) {
   try {
     await loadUsers();
     const found = findUserByName(usuario);
-    const valid = found && found[1].activo !== false && (await hashPassword(pass, found[1].salt)) === found[1].hash;
-    if (!valid) { toast("Usuario o contraseña incorrectos, o usuario inactivo.", true); return; }
-    $("loginPassword").value = "";
+    if (!found) { logAccess(usuario, "Intento fallido", "Usuario no registrado"); toast("Usuario o contraseña incorrectos.", true); return; }
     const [id, user] = found;
-    update(ref(db, `usuarios/${id}`), { ultimoIngreso: Date.now() }).catch(() => {});
+    if (user.activo === false) { logAccess(usuario, "Intento fallido", "Usuario inactivo"); toast("El usuario está inactivo. Contacte a un Administrador.", true); return; }
+    if (user.bloqueado) {
+      if (user.bloqueadoHasta && Date.now() >= user.bloqueadoHasta) {
+        await update(ref(db, `usuarios/${id}`), { bloqueado: false, bloqueadoHasta: 0, intentosFallidos: 0 });
+        Object.assign(user, { bloqueado: false, bloqueadoHasta: 0, intentosFallidos: 0 });
+      } else {
+        logAccess(usuario, "Intento bloqueado", "Ingreso rechazado: usuario bloqueado");
+        const mins = user.bloqueadoHasta ? Math.ceil((user.bloqueadoHasta - Date.now()) / 60000) : 0;
+        toast(mins ? `Usuario bloqueado temporalmente. Intente de nuevo en ${mins} min.` : "Usuario bloqueado por intentos fallidos. Contacte a un Administrador.", true);
+        return;
+      }
+    }
+    if ((await hashPassword(pass, user.salt)) !== user.hash) {
+      const intentos = (Number(user.intentosFallidos) || 0) + 1;
+      if (intentos >= MAX_INTENTOS) {
+        const temporal = user.rol === "Administrador" && activeAdmins(id) === 0;
+        const bloqueadoHasta = temporal ? Date.now() + BLOQUEO_TEMPORAL_MS : 0;
+        await update(ref(db, `usuarios/${id}`), { intentosFallidos: intentos, bloqueado: true, bloqueadoHasta });
+        logAccess(usuario, "Bloqueo", temporal ? `${MAX_INTENTOS} intentos fallidos · bloqueo temporal de 15 min (único Administrador)` : `${MAX_INTENTOS} intentos fallidos`);
+        toast(temporal ? "Demasiados intentos. Usuario bloqueado temporalmente por 15 minutos." : "Demasiados intentos. Usuario bloqueado; contacte a un Administrador.", true);
+      } else {
+        await update(ref(db, `usuarios/${id}`), { intentosFallidos: intentos });
+        logAccess(usuario, "Intento fallido", `Contraseña incorrecta (${intentos} de ${MAX_INTENTOS})`);
+        toast(`Usuario o contraseña incorrectos. Intentos restantes: ${MAX_INTENTOS - intentos}.`, true);
+      }
+      return;
+    }
+    $("loginPassword").value = "";
+    update(ref(db, `usuarios/${id}`), { ultimoIngreso: Date.now(), intentosFallidos: 0 }).catch(() => {});
+    logAccess(usuario, "Ingreso", user.claveTemporal ? "Con clave temporal" : "");
     if (user.claveTemporal) {
       currentUser = { id, ...user };
       $("forceChangeInfo").textContent = `Hola ${user.nombre || user.usuario}, su clave es temporal. Defina una nueva contraseña para continuar.`;
@@ -166,6 +224,7 @@ async function submitSetup(e) {
     const r = push(ref(db, "usuarios"));
     await set(r, user);
     usuarios[r.key] = user;
+    logAccess(usuario, "Ingreso", "Creación del Administrador inicial");
     toast("Administrador inicial creado.");
     enterApp(r.key, user);
   } catch (error) { console.error(error); toast("No se pudo crear el administrador. Revise las reglas de Firebase.", true); }
@@ -218,7 +277,11 @@ async function submitChangePassword(e) {
   } catch (error) { toast(error.message || "No se pudo cambiar la contraseña.", true); }
 }
 
-function logout() { clearSession(); location.reload(); }
+async function logout() {
+  if (currentUser) await Promise.race([logAccess(currentUser.usuario, "Cierre de sesión"), new Promise(res => setTimeout(res, 1500))]);
+  clearSession();
+  location.reload();
+}
 
 /* ---------- Modales ---------- */
 function openModal(id) { $(id).hidden = false; $(id).setAttribute("aria-hidden", "false"); }
@@ -231,6 +294,23 @@ function listenAdminData() {
   adminListening = true;
   onValue(ref(db, "usuarios"), snap => { usuarios = snap.val() || {}; renderUsers(); });
   onValue(ref(db, "solicitudesClave"), snap => renderRequests(snap.val() || {}));
+  onValue(query(ref(db, "accesos"), limitToLast(300)), snap => { accessLog = Object.values(snap.val() || {}); renderAccessLog(); }, error => console.warn("No se pudo leer la bitácora de accesos.", error));
+}
+
+let accessLog = [];
+function renderAccessLog() {
+  const body = $("accessLogBody"); if (!body) return;
+  const q = clean($("accessLogSearch").value, 60).toLowerCase();
+  const rows = accessLog
+    .filter(a => !q || `${a.usuario} ${a.evento} ${a.detalle}`.toLowerCase().includes(q))
+    .sort((a, b) => (b.fecha || 0) - (a.fecha || 0));
+  body.replaceChildren();
+  rows.forEach(a => {
+    const tr = document.createElement("tr");
+    tr.append(td(new Date(a.fecha || 0).toLocaleString("es-CO")), td(a.usuario || "—"), td(a.evento || "—"), td(a.detalle || "—"));
+    body.appendChild(tr);
+  });
+  $("accessLogCount").textContent = `${rows.length} eventos (últimos 300 registrados)`;
 }
 
 function renderPermChecks() {
@@ -309,6 +389,7 @@ async function submitUserForm(e) {
         const err = passwordError(pass, confirm); if (err) throw new Error(err);
         changes.salt = randomSalt();
         changes.hash = await hashPassword(pass, changes.salt);
+        Object.assign(changes, { bloqueado: false, bloqueadoHasta: 0, intentosFallidos: 0 });
       }
       await update(ref(db, `usuarios/${editingUserId}`), changes);
       if (changes.hash) await clearRequestsFor(before.usuario);
@@ -316,6 +397,15 @@ async function submitUserForm(e) {
     }
     resetUserForm();
   } catch (error) { toast(error.message || "No se pudo guardar el usuario.", true); }
+}
+
+async function unlockUser(id) {
+  const u = usuarios[id]; if (!u) return;
+  try {
+    await update(ref(db, `usuarios/${id}`), { bloqueado: false, bloqueadoHasta: 0, intentosFallidos: 0 });
+    logAccess(u.usuario, "Desbloqueo", `Por ${currentUser.usuario}`);
+    toast(`Usuario ${u.usuario} desbloqueado.`);
+  } catch (error) { console.error(error); toast("No se pudo desbloquear el usuario.", true); }
 }
 
 async function deleteUser(id) {
@@ -345,9 +435,11 @@ function renderUsers() {
   body.replaceChildren();
   Object.entries(usuarios).sort((a, b) => String(a[1].usuario).localeCompare(String(b[1].usuario), "es")).forEach(([id, u]) => {
     const tr = document.createElement("tr");
-    tr.append(td(u.usuario), td(u.nombre || "—"), td(u.rol), td(u.claveTemporal ? "Temporal" : "Fija"), td(u.activo === false ? "Inactivo" : "Activo"));
+    tr.append(td(u.usuario), td(u.nombre || "—"), td(u.rol), td(u.claveTemporal ? "Temporal" : "Fija"), td(u.bloqueado ? "Bloqueado" : (u.activo === false ? "Inactivo" : "Activo")));
     const act = document.createElement("td"); act.className = "actions";
-    act.append(makeBtn("Editar", "edit", () => editUser(id)), makeBtn("Restablecer clave", "transfer", () => resetPasswordFor(id)), makeBtn("Eliminar", "delete", () => deleteUser(id)));
+    act.append(makeBtn("Editar", "edit", () => editUser(id)), makeBtn("Restablecer clave", "transfer", () => resetPasswordFor(id)));
+    if (u.bloqueado) act.append(makeBtn("Desbloquear", "plus", () => unlockUser(id)));
+    act.append(makeBtn("Eliminar", "delete", () => deleteUser(id)));
     tr.appendChild(act); body.appendChild(tr);
   });
   $("usersCount").textContent = `${Object.keys(usuarios).length} usuarios`;
@@ -395,6 +487,7 @@ export async function initAuth(database, onReady) {
   $("userRole").addEventListener("change", togglePermBox);
   $("userForm").addEventListener("submit", submitUserForm);
   $("userResetBtn").addEventListener("click", resetUserForm);
+  $("accessLogSearch").addEventListener("input", renderAccessLog);
   document.addEventListener("keydown", e => {
     if (e.key !== "Escape") return;
     if (!$("usersModal").hidden) closeModal("usersModal");
@@ -406,12 +499,15 @@ export async function initAuth(database, onReady) {
     if (!Object.keys(usuarios).length) { showScreen("setupCard"); return; }
     const session = readSession();
     const user = session && usuarios[session.id];
-    if (user && user.activo !== false && !user.claveTemporal && String(user.hash || "").slice(0, 16) === session.h) {
+    if (user && user.activo !== false && !user.bloqueado && !user.claveTemporal && String(user.hash || "").slice(0, 16) === session.h) {
       enterApp(session.id, user);
       return;
     }
     clearSession();
     showScreen("loginCard");
+    let idle = false;
+    try { idle = sessionStorage.getItem(IDLE_FLAG) === "1"; sessionStorage.removeItem(IDLE_FLAG); } catch {}
+    if (idle) toast("Su sesión se cerró por 5 minutos de inactividad.");
   } catch (error) {
     console.error("No se pudo leer usuarios:", error);
     showScreen("loginCard");

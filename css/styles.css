@@ -1669,3 +1669,8 @@ body.auth-locked .app-shell { display: none; }
 .json-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .json-actions .btn { padding: 9px 6px; font-size: 12px; }
 .user-actions .perm-hidden { display: none !important; }
+.access-log { margin: 0 16px 16px; display: grid; gap: 8px; }
+.access-log-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
+.access-log-head h4 { margin: 0; }
+.access-log-head input { width: min(280px, 100%); }
+.access-log-wrap { max-height: 280px; overflow-y: auto; }
