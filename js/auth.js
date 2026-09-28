@@ -85,7 +85,7 @@ function startIdleWatch() {
     if (!currentUser || Date.now() - lastActivity < INACTIVIDAD_MS) return;
     clearInterval(idleTimer); idleTimer = null;
     await Promise.race([logAccess(currentUser.usuario, "Cierre por inactividad", "5 minutos sin actividad"), new Promise(res => setTimeout(res, 1500))]);
-    try { sessionStorage.setItem(IDLE_FLAG, "1"); } catch {}
+    try { sessionStorage.setItem(IDLE_FLAG, "idle"); } catch {}
     clearSession();
     location.reload();
   }, 10000);
@@ -130,7 +130,14 @@ function showScreen(name) {
   if (focus) setTimeout(() => focus.focus(), 30);
 }
 
+function showLoginNotice(text, kind) {
+  $("loginNoticeText").textContent = text;
+  $("loginNotice").className = `login-notice ${kind}`;
+  $("loginNotice").hidden = false;
+}
+
 function enterApp(id, user) {
+  $("loginNotice").hidden = true;
   currentUser = { id, ...user };
   saveSession(id, user);
   showScreen("");
@@ -279,6 +286,7 @@ async function submitChangePassword(e) {
 
 async function logout() {
   if (currentUser) await Promise.race([logAccess(currentUser.usuario, "Cierre de sesión"), new Promise(res => setTimeout(res, 1500))]);
+  try { if (currentUser) sessionStorage.setItem(IDLE_FLAG, "logout"); } catch {}
   clearSession();
   location.reload();
 }
@@ -505,9 +513,10 @@ export async function initAuth(database, onReady) {
     }
     clearSession();
     showScreen("loginCard");
-    let idle = false;
-    try { idle = sessionStorage.getItem(IDLE_FLAG) === "1"; sessionStorage.removeItem(IDLE_FLAG); } catch {}
-    if (idle) toast("Su sesión se cerró por 5 minutos de inactividad.");
+    let reason = "";
+    try { reason = sessionStorage.getItem(IDLE_FLAG) || ""; sessionStorage.removeItem(IDLE_FLAG); } catch {}
+    if (reason === "idle") showLoginNotice("Su sesión expiró por 5 minutos de inactividad. Por favor, inicie sesión nuevamente para continuar.", "warn");
+    else if (reason === "logout") showLoginNotice("Sesión cerrada correctamente. Inicie sesión nuevamente para continuar.", "info");
   } catch (error) {
     console.error("No se pudo leer usuarios:", error);
     showScreen("loginCard");

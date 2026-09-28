@@ -11,6 +11,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <script src="https://unpkg.com/docx@8.2.2/build/index.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
@@ -22,6 +23,7 @@
     <form id="loginCard" class="auth-card" novalidate hidden>
       <div class="auth-brand"><div class="brand-mark">TI</div><div><strong>Sistema de Gestión</strong><span>Control de Inventario</span></div></div>
       <h2>Iniciar sesión</h2>
+      <div id="loginNotice" class="login-notice" role="alert" hidden><i class="fa-solid fa-clock" aria-hidden="true"></i><span id="loginNoticeText"></span></div>
       <div class="field"><label for="loginUser">Usuario</label><input id="loginUser" autocomplete="username" maxlength="60" required></div>
       <div class="field"><label for="loginPassword">Contraseña</label><input id="loginPassword" type="password" autocomplete="current-password" required></div>
       <button id="loginSubmitBtn" class="btn primary" type="submit"><i class="fa-solid fa-right-to-bracket" aria-hidden="true"></i><span>Ingresar</span></button>
@@ -329,11 +331,12 @@
     <div class="modal order-modal">
       <div class="modal-head"><h3>Orden de Requerimiento</h3><button id="closeOrderModal" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
       <div class="order-controls">
-        <div class="field"><label for="orderSolicitante">Solicitante</label><input id="orderSolicitante" maxlength="120" placeholder="Nombre de quien solicita"></div>
-        <div class="field"><label for="orderSolicitadoA">Solicitado a</label><input id="orderSolicitadoA" maxlength="120" placeholder="Persona, área o proveedor al que se solicita"></div>
-        <div class="field"><label for="orderArea">Área / Departamento</label><input id="orderArea" maxlength="120" placeholder="Área o dependencia"></div>
-        <div class="field"><label for="orderPriority">Nivel de prioridad</label><select id="orderPriority"><option>Normal</option><option>Alta</option><option>Urgente</option></select></div>
-        <div class="field full"><label for="orderJustification">Justificación / Motivo del Pedido</label><textarea id="orderJustification" rows="3" maxlength="500" placeholder="Ej. Reposición de insumos agotados para mantenimiento"></textarea></div>
+        <div class="field"><label for="orderFecha">Fecha solicitud</label><input id="orderFecha" type="date"></div>
+        <div class="field"><label for="orderSolicitante">Nombre del solicitante</label><input id="orderSolicitante" maxlength="120" placeholder="Nombre de quien solicita"></div>
+        <div class="field"><label for="orderCentroCostos">Centro de costos</label><input id="orderCentroCostos" maxlength="60" placeholder="Opcional"></div>
+        <div class="field"><label for="orderMesDesde">Periodo de consumo: del mes</label><input id="orderMesDesde" type="month"></div>
+        <div class="field"><label for="orderMesHasta">Periodo de consumo: hasta el mes</label><input id="orderMesHasta" type="month"></div>
+        <p class="order-hint full">"Cantidad Autorizada" siempre queda en blanco. La cantidad solicitada y el uso se pueden editar directamente en la tabla.</p>
       </div>
       <div id="orderDocument" class="order-document"></div>
       <div class="modal-actions"><button id="downloadOrderPdfBtn" class="btn primary"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i><span>Descargar PDF</span></button><button id="downloadOrderWordBtn" class="btn secondary"><i class="fa-solid fa-file-word" aria-hidden="true"></i><span>Descargar Word</span></button></div>

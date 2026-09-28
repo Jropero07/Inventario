@@ -1399,14 +1399,54 @@ async function downloadQrPng(){
   link.remove();
 }
 
+const ORDER_MIN_ROWS=15;
+let orderUses=new Map();
+const MONTHS_ES=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+
+function monthLabel(value){
+  const m=String(value||"").match(/^(\d{4})-(\d{2})$/);
+  if(!m) return "";
+  const name=MONTHS_ES[Number(m[2])-1]||"";
+  return name ? `${name.charAt(0).toUpperCase()}${name.slice(1)} ${m[1]}` : "";
+}
+function dateLabel(value){
+  const m=String(value||"").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : "";
+}
+function todayInput(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
+function monthInput(offset=0){ const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()+offset); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; }
+
 function getOrderMeta(){
   return {
+    fecha:dateLabel($("orderFecha").value),
     solicitante:sanitizeText($("orderSolicitante").value,120),
-    solicitadoA:sanitizeText($("orderSolicitadoA").value,120),
-    area:sanitizeText($("orderArea").value,120),
-    prioridad:sanitizeText($("orderPriority").value,40),
-    justificacion:sanitizeText($("orderJustification").value,500)
+    centroCostos:sanitizeText($("orderCentroCostos").value,60),
+    mesDesde:monthLabel($("orderMesDesde").value),
+    mesHasta:monthLabel($("orderMesHasta").value)
   };
+}
+
+function orderSpecs(item){
+  return [[item.marca,item.modelo].filter(Boolean).join(" "),item.especificaciones,item.unidad && !/^unidad(es)?$/i.test(item.unidad)?`Unidad: ${item.unidad}`:""].map(x=>sanitizeText(x,300)).filter(Boolean).join(" · ");
+}
+
+/* Uso sugerido: reposición de stock + los espacios que más consumen el artículo según las salidas registradas */
+function suggestedOrderUse(item){
+  const totals=new Map();
+  movimientos.filter(m=>/^Salida/.test(String(m.tipoAccion||"")) && m.codigo===item.codigo && m.espacioDestino)
+    .forEach(m=>totals.set(m.espacioDestino,(totals.get(m.espacioDestino)||0)+(Number(m.cantidad)||0)));
+  const top=[...totals.entries()].sort((a,b)=>b[1]-a[1]).slice(0,2).map(([space])=>space);
+  return top.length ? `Reposición de stock – ${top.join(", ")}` : "Reposición de stock";
+}
+
+function orderLines(){
+  return getOrderItems().map(item=>({
+    item,
+    descripcion:item.nombre,
+    especificaciones:orderSpecs(item),
+    cantidad:orderQuantities.get(item.idFirebase)||suggestedOrderQuantity(item),
+    uso:orderUses.has(item.idFirebase)?orderUses.get(item.idFirebase):suggestedOrderUse(item)
+  }));
 }
 
 function suggestedOrderQuantity(item){
@@ -1426,53 +1466,73 @@ function buildOrderDocument() {
   const items=getOrderItems();
   const meta=getOrderMeta();
   const root=$("orderDocument"); root.replaceChildren();
-  if(!currentOrderFolio) currentOrderFolio=`REQ-${new Date().getFullYear()}-${String(orderCounter++).padStart(4,"0")}`;
   for(const item of items){ if(!orderQuantities.has(item.idFirebase)) orderQuantities.set(item.idFirebase,suggestedOrderQuantity(item)); }
+  const lines=orderLines();
+  const el=(tag,text="",cls="",attrs={})=>{const x=makeEl(tag,text,cls);Object.entries(attrs).forEach(([k,v])=>x.setAttribute(k,v));return x;};
 
-  const header=document.createElement("div"); header.className="order-header";
-  const left=document.createElement("div"); left.className="order-title";
-  left.append(makeEl("h2","SISTEMA DE GESTIÓN DE INVENTARIO"),makeEl("p","Orden de Requerimiento de Consumibles"));
-  const right=document.createElement("div"); right.className="order-meta";
-  right.append(makeEl("p",`Folio: ${currentOrderFolio}`),makeEl("p",`Fecha: ${new Date().toLocaleDateString("es-CO")}`));
-  header.append(left,right); root.appendChild(header);
+  const page=el("div","","fmt-page");
+  // Encabezado del formato
+  const head=el("table","","fmt-head");
+  const r1=document.createElement("tr"), r2=document.createElement("tr"), r3=document.createElement("tr");
+  const logoTd=el("td","","fmt-logo",{rowspan:"3"}); const logo=document.createElement("img"); logo.src="assets/logo_colegio.png"; logo.alt="Logo institucional"; logoTd.appendChild(logo);
+  r1.append(logoTd,el("td","FORMATO SOLICITUD DE PEDIDOS A COMPRAS","fmt-title",{rowspan:"2"}),el("td","CÓDIGO:GA-LO-CO01","fmt-code"));
+  r2.append(el("td","VERSIÓN:01","fmt-code"));
+  const pages=el("td","","fmt-code"); pages.append(el("div","PÁGINAS:"),el("div","Página 1 de 1","fmt-right"));
+  r3.append(el("td","PROCEDIMIENTO: GESTIÓN ADMINISTRATIVA","fmt-title"),pages);
+  head.append(r1,r2,r3); page.appendChild(head);
 
-  const data=document.createElement("div"); data.className="order-data";
-  [["Solicitante",meta.solicitante||"—"],["Solicitado a",meta.solicitadoA||"—"],["Área / Departamento",meta.area||"—"],["Nivel de Prioridad",meta.prioridad||"—"]]
-    .forEach(([a,b])=>{const x=document.createElement("div");x.className="order-box";x.append(makeEl("strong",a),document.createElement("br"),makeEl("span",b));data.appendChild(x)});
-  root.appendChild(data);
+  // Datos generales
+  const data=el("table","","fmt-data");
+  const d1=document.createElement("tr"); d1.append(el("td","Fecha Solicitud","fmt-label"),el("td",meta.fecha,"",{colspan:"6"}));
+  const d2=document.createElement("tr"); d2.append(el("td","Área o sección","fmt-label"),el("td","Departamento TIC","",{colspan:"3"}),el("td","Centro de Costos","fmt-label",{colspan:"2"}),el("td",meta.centroCostos));
+  const d3=document.createElement("tr"); d3.append(el("td","Nombre del Solicitante","fmt-label"),el("td",meta.solicitante,"",{colspan:"3"}),el("td","","fmt-label",{colspan:"2"}),el("td",""));
+  const d4=document.createElement("tr"); d4.append(el("td","Periodo de consumo","fmt-label"),el("td","Del mes"),el("td",meta.mesDesde),el("td","Hasta el mes","",{colspan:"2"}),el("td",meta.mesHasta,"",{colspan:"2"}));
+  data.append(d1,d2,d3,d4); page.appendChild(data);
 
-  const table=document.createElement("table"); table.className="order-table";
-  const thead=document.createElement("thead"), hr=document.createElement("tr");
-  ["N°","Descripción / Material","Stock Actual","Stock Mínimo","Cantidad a Solicitar"].forEach(h=>hr.appendChild(makeEl("th",h)));
-  thead.appendChild(hr); table.appendChild(thead);
-  const tbody=document.createElement("tbody");
-  items.forEach((item,n)=>{
-    const tr=document.createElement("tr");
-    addCell(tr,String(n+1)); addCell(tr,item.nombre); addCell(tr,String(item.stockActual),"danger-cell"); addCell(tr,String(item.stockMinimo));
-    const qtyTd=document.createElement("td");
-    const input=document.createElement("input"); input.type="number"; input.min="1"; input.step="1"; input.inputMode="numeric"; input.className="order-quantity"; input.value=String(orderQuantities.get(item.idFirebase)||suggestedOrderQuantity(item)); input.dataset.itemId=item.idFirebase; input.setAttribute("aria-label",`Cantidad a solicitar para ${item.nombre}`);
-    input.addEventListener("input",()=>{const q=safeInt(input.value);if(q!==null&&q>=1)orderQuantities.set(item.idFirebase,q);});
-    qtyTd.appendChild(input); tr.appendChild(qtyTd); tbody.appendChild(tr);
-  });
-  if(!items.length){const tr=document.createElement("tr");const td=makeEl("td","No hay ítems para el filtro de urgencia seleccionado.");td.colSpan=5;tr.appendChild(td);tbody.appendChild(tr);}
-  table.appendChild(tbody); root.appendChild(table);
+  // Tabla de bienes
+  const table=el("table","","fmt-items");
+  const hr=document.createElement("tr");
+  ["No.","Descripción de los bienes","Especificaciones","Cantidad Solicitada","Cantidad Autorizada","Uso"].forEach(h=>hr.appendChild(el("th",h)));
+  table.appendChild(hr);
+  const total=Math.max(ORDER_MIN_ROWS,lines.length);
+  for(let n=0;n<total;n++){
+    const line=lines[n]; const tr=document.createElement("tr");
+    tr.appendChild(el("td",String(n+1),"fmt-num"));
+    tr.appendChild(el("td",line?line.descripcion:""));
+    tr.appendChild(el("td",line?line.especificaciones:""));
+    const qtyTd=el("td","","fmt-center"), useTd=document.createElement("td");
+    if(line){
+      const input=document.createElement("input"); input.type="number"; input.min="1"; input.step="1"; input.inputMode="numeric"; input.className="order-quantity"; input.value=String(line.cantidad); input.setAttribute("aria-label",`Cantidad solicitada para ${line.descripcion}`);
+      input.addEventListener("input",()=>{const q=safeInt(input.value);if(q!==null&&q>=1)orderQuantities.set(line.item.idFirebase,q);});
+      qtyTd.appendChild(input);
+      const use=document.createElement("textarea"); use.rows=2; use.maxLength=120; use.className="order-use"; use.value=line.uso; use.setAttribute("aria-label",`Uso de ${line.descripcion}`);
+      use.addEventListener("input",()=>orderUses.set(line.item.idFirebase,sanitizeText(use.value,120)));
+      useTd.appendChild(use);
+    }
+    tr.append(qtyTd,el("td","","fmt-center"),useTd);
+    table.appendChild(tr);
+  }
+  page.appendChild(table);
+  if(!lines.length) page.appendChild(el("p","No hay artículos para el filtro de alertas seleccionado.","fmt-empty"));
 
-  const just=document.createElement("div"); just.className="justification";
-  just.append(makeEl("strong","Justificación / Motivo del Pedido"),makeEl("p",meta.justificacion||"—")); root.appendChild(just);
-  const signs=document.createElement("div"); signs.className="signatures";
-  [meta.solicitante?`Solicitado Por: ${meta.solicitante}`:"Solicitado Por",meta.solicitadoA?`Solicitado A: ${meta.solicitadoA}`:"Aprobado Por"]
-    .forEach(x=>signs.appendChild(makeEl("div",x,"signature")));
-  root.appendChild(signs);
+  // Pie del formato
+  const foot=el("div","","fmt-foot");
+  const efqm=document.createElement("img"); efqm.src="assets/logo_efqm.png"; efqm.alt="EFQM"; efqm.className="fmt-efqm";
+  foot.append(efqm,el("div","","fmt-foot-line"));
+  const footText=el("div","","fmt-foot-text"); footText.append(el("span","COLEGIO AMERICANO DE BARRANQUILLA"),el("span","COPIA CONTROLADA","fmt-muted"));
+  foot.appendChild(footText); page.appendChild(foot);
+  root.appendChild(page);
 }
 
 function openOrder(){
   currentOrderFolio="";
   orderQuantities=new Map();
-  $("orderSolicitante").value="";
-  $("orderSolicitadoA").value="";
-  $("orderArea").value="";
-  $("orderPriority").value=inventario.some(i=>alertLevel(i)==="critical")?"Alta":"Normal";
-  $("orderJustification").value="";
+  orderUses=new Map();
+  $("orderFecha").value=todayInput();
+  $("orderSolicitante").value=getCurrentUser()?.nombre||"";
+  $("orderCentroCostos").value="";
+  $("orderMesDesde").value=monthInput(0);
+  $("orderMesHasta").value=monthInput(0);
   buildOrderDocument();
   $("orderModal").hidden=false;
   $("orderModal").setAttribute("aria-hidden","false");
@@ -1528,26 +1588,75 @@ function exportPdf(){
   html2pdf().set({margin:6,filename:"inventario_general.pdf",html2canvas:{scale:2},jsPDF:{orientation:"landscape",unit:"mm",format:"a3"},pagebreak:{mode:["avoid-all","css","legacy"]}}).from(wrap).save();
 }
 
+const W_NS="http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+function wChildren(node,name){ return [...node.childNodes].filter(n=>n.namespaceURI===W_NS && n.localName===name); }
+function setWordCellText(xml,tc,text){
+  const p=wChildren(tc,"p")[0]; if(!p) return;
+  wChildren(p,"r").forEach(r=>p.removeChild(r));
+  if(!text) return;
+  const r=xml.createElementNS(W_NS,"w:r");
+  const pPr=wChildren(p,"pPr")[0]; const baseRPr=pPr && wChildren(pPr,"rPr")[0];
+  if(baseRPr){ const rPr=xml.createElementNS(W_NS,"w:rPr"); [...baseRPr.childNodes].forEach(n=>rPr.appendChild(n.cloneNode(true))); r.appendChild(rPr); }
+  const t=xml.createElementNS(W_NS,"w:t"); t.setAttribute("xml:space","preserve"); t.textContent=String(text); r.appendChild(t);
+  p.appendChild(r);
+}
+
+/* Diligencia la plantilla oficial (assets/formato_pedido_materiales.docx) sin alterar su diseño */
 async function exportOrderWord(){
-  if(!window.docx){showToast("La librería DOCX no está disponible.",true);return;}
-  const {Document,Packer,Paragraph,Table,TableRow,TableCell,TextRun,WidthType}=window.docx;
-  const items=getOrderItems(); const meta=getOrderMeta();
-  const rows=[new TableRow({children:["N°","Descripción / Material","Stock Actual","Stock Mínimo","Cantidad a Solicitar"].map(x=>new TableCell({children:[new Paragraph(x)]}))})];
-  items.forEach((item,n)=>rows.push(new TableRow({children:[n+1,item.nombre,item.stockActual,item.stockMinimo,orderQuantities.get(item.idFirebase)||suggestedOrderQuantity(item)].map(x=>new TableCell({children:[new Paragraph(String(x))]}))})));
-  const doc=new Document({sections:[{children:[
-    new Paragraph({children:[new TextRun({text:"SISTEMA DE GESTIÓN DE INVENTARIO",bold:true,size:28})]}),
-    new Paragraph("Orden de Requerimiento de Consumibles"),
-    new Paragraph(`Folio: ${currentOrderFolio || "—"}`),
-    new Paragraph(`Fecha: ${new Date().toLocaleDateString("es-CO")}`),
-    new Paragraph(`Solicitante: ${meta.solicitante || "—"}`),
-    new Paragraph(`Solicitado a: ${meta.solicitadoA || "—"}`),
-    new Paragraph(`Área / Departamento: ${meta.area || "—"}`),
-    new Paragraph(`Nivel de Prioridad: ${meta.prioridad || "—"}`),
-    new Table({rows,width:{size:100,type:WidthType.PERCENTAGE}}),
-    new Paragraph(`Justificación / Motivo del Pedido: ${meta.justificacion || "—"}`),
-    new Paragraph(`\n\n__________________________                         __________________________\n${meta.solicitante?`Solicitado Por: ${meta.solicitante}`:"Solicitado Por"}                         ${meta.solicitadoA?`Solicitado A: ${meta.solicitadoA}`:"Aprobado Por"}`)
-  ]}]});
-  saveAs(await Packer.toBlob(doc),"orden_requerimiento.docx");
+  if(!window.JSZip){showToast("La librería para Word no está disponible.",true);return;}
+  try{
+    const res=await fetch("assets/formato_pedido_materiales.docx",{cache:"no-store"});
+    if(!res.ok) throw new Error("No se encontró la plantilla del formato.");
+    const zip=await JSZip.loadAsync(await res.arrayBuffer());
+    const xmlText=await zip.file("word/document.xml").async("string");
+    const xml=new DOMParser().parseFromString(xmlText,"application/xml");
+    const body=xml.getElementsByTagNameNS(W_NS,"body")[0];
+    const [dataTbl,itemsTbl]=wChildren(body,"tbl");
+    const meta=getOrderMeta();
+    const dRows=wChildren(dataTbl,"tr").map(tr=>wChildren(tr,"tc"));
+    setWordCellText(xml,dRows[0][1],meta.fecha);
+    setWordCellText(xml,dRows[1][3],meta.centroCostos);
+    setWordCellText(xml,dRows[2][1],meta.solicitante);
+    setWordCellText(xml,dRows[3][2],meta.mesDesde);
+    setWordCellText(xml,dRows[3][4],meta.mesHasta);
+
+    const lines=orderLines();
+    let rows=wChildren(itemsTbl,"tr").slice(1);
+    const template=rows[rows.length-1];
+    for(let n=rows.length;n<lines.length;n++){
+      const clone=template.cloneNode(true);
+      itemsTbl.appendChild(clone);
+      setWordCellText(xml,wChildren(clone,"tc")[0],String(n+1));
+      wChildren(clone,"tc").slice(1).forEach(tc=>setWordCellText(xml,tc,""));
+    }
+    rows=wChildren(itemsTbl,"tr").slice(1);
+    lines.forEach((line,n)=>{
+      const cells=wChildren(rows[n],"tc");
+      setWordCellText(xml,cells[1],line.descripcion);
+      setWordCellText(xml,cells[2],line.especificaciones);
+      setWordCellText(xml,cells[3],String(line.cantidad));
+      setWordCellText(xml,cells[4],"");
+      setWordCellText(xml,cells[5],line.uso);
+    });
+    zip.file("word/document.xml",new XMLSerializer().serializeToString(xml));
+    const blob=await zip.generateAsync({type:"blob",mimeType:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+    saveAs(blob,`Pedido_materiales_${$("orderFecha").value||todayInput()}.docx`);
+  }catch(error){
+    console.error("Formato Word:",error);
+    showToast(error.message||"No se pudo generar el formato Word.",true);
+  }
+}
+
+function exportOrderPdf(){
+  const source=$("orderDocument");
+  const clone=source.cloneNode(true);
+  clone.querySelectorAll("input, textarea").forEach((input,i)=>{
+    const original=source.querySelectorAll("input, textarea")[i];
+    const span=document.createElement("span"); span.textContent=original?original.value:input.value;
+    input.replaceWith(span);
+  });
+  clone.classList.add("order-document-print");
+  html2pdf().set({margin:0,filename:`Pedido_materiales_${$("orderFecha").value||todayInput()}.pdf`,html2canvas:{scale:2},jsPDF:{unit:"mm",format:"letter"}}).from(clone).save();
 }
 
 function normalizeImportHeader(value){
@@ -1635,7 +1744,7 @@ $("clearMovementFiltersBtn").addEventListener("click",()=>{["movementSearchName"
 $("estado").addEventListener("change",toggleLocationFields);$("generateSkuBtn").addEventListener("click",generateSku);$("generateConsumableSkuBtn").addEventListener("click",generateConsumableSku);$("scanBtn").addEventListener("click",()=>startScanner("codigo"));$("generalScanBtn").addEventListener("click",()=>startScanner("generalSearch",()=>renderGeneralInventoryTable()));$("closeScannerBtn").addEventListener("click",stopScanner);
 $("scannerModal").addEventListener("click",e=>{if(e.target===$("scannerModal"))stopScanner()});$("qrModal").addEventListener("click",e=>{if(e.target===$("qrModal"))closeQrModal()});$("closeQrBtn").addEventListener("click",closeQrModal);$("cancelQrBtn").addEventListener("click",closeQrModal);$("downloadQrBtn").addEventListener("click",downloadQrPng);$("orderModal").addEventListener("click",e=>{if(e.target===$("orderModal"))closeOrder()});$("closeOrderModal").addEventListener("click",closeOrder);
 $("movementModal").addEventListener("click",e=>{if(e.target===$("movementModal"))closeMovementModal()});$("closeMovementModal").addEventListener("click",closeMovementModal);$("cancelMovementBtn").addEventListener("click",closeMovementModal);$("movementForm").addEventListener("submit",submitMovement);
-["orderSolicitante","orderSolicitadoA","orderArea","orderJustification"].forEach(id=>$(id).addEventListener("input",buildOrderDocument));["orderPriority"].forEach(id=>$(id).addEventListener("change",buildOrderDocument));
+["orderFecha","orderSolicitante","orderCentroCostos","orderMesDesde","orderMesHasta"].forEach(id=>$(id).addEventListener("input",buildOrderDocument));
 document.querySelectorAll(".alert-filter").forEach(btn=>btn.addEventListener("click",()=>{alertFilter=btn.dataset.alertFilter||"all";renderCriticals();if(!$("orderModal").hidden)buildOrderDocument();}));
 $("serial").addEventListener("input",()=>{clearTimeout(serialValidationTimer);serialValidationTimer=setTimeout(()=>validateSerialField(assetEditingId || $("editingId").value || ""),250);});
 $("serial").addEventListener("blur",()=>validateSerialField(assetEditingId || $("editingId").value || ""));
@@ -1702,7 +1811,7 @@ $("consumableForm").addEventListener("submit",async e=>{
   }
 });
 $("cancelEditBtn").addEventListener("click",clearAssetForm);$("clearConsumableBtn").addEventListener("click",()=>{$("consumableForm").reset();$("cEditingId").value="";consumableEditingId="";});
-$("generateOrderBtn").addEventListener("click",openOrder);$("downloadOrderPdfBtn").addEventListener("click",()=>html2pdf().set({margin:8,filename:"orden_requerimiento.pdf",html2canvas:{scale:2},jsPDF:{unit:"mm",format:"a4"}}).from($("orderDocument")).save());$("downloadOrderWordBtn").addEventListener("click",exportOrderWord);
+$("generateOrderBtn").addEventListener("click",openOrder);$("downloadOrderPdfBtn").addEventListener("click",exportOrderPdf);$("downloadOrderWordBtn").addEventListener("click",exportOrderWord);
 $("exportExcelBtn").addEventListener("click",exportExcel);$("exportPdfBtn").addEventListener("click",exportPdf);$("exportJsonBtn").addEventListener("click",exportJson);$("importJsonInput").addEventListener("change",e=>importJson(e.target.files[0]));
 window.addEventListener("beforeunload",()=>{if(scannerRunning&&scanner)scanner.stop().catch(()=>{})});
 
