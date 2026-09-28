@@ -741,7 +741,7 @@ function renderAnalytics() {
   const ninetyDaysAgo=Date.now()-90*86400000;
   const recent=new Map(); // clave de artículo -> {qty, count}
   for(const m of exits){
-    const qty=Math.max(0,Number(m.cantidad)||0); if(!qty) continue;
+    const qty=Math.max(0,(Number(m.cantidad)||0)-(Number(m.cantidadRevertida)||0)); if(!qty) continue;
     const key=itemKey(m);
     const itemName=nameByKey.get(key)||sanitizeText(m.nombre,140)||"Sin nombre";
     const space=sanitizeText(m.espacioDestino,120)||"Sin destino registrado";
@@ -810,6 +810,7 @@ function movementActionCategory(m) {
   const action=String(m.tipoAccion||"");
   if(/^Entrada/.test(action)) return "Entrada";
   if(/^Salida/.test(action)) return "Salida";
+  if(/^Reversi/.test(action)) return "Reversión";
   return action;
 }
 
@@ -842,8 +843,85 @@ function filteredMovements() {
 function renderMovements() {
   const body=$("movementTableBody");body.replaceChildren();
   const data=filteredMovements().sort((a,b)=>(b.fechaHora||0)-(a.fechaHora||0));
-  data.forEach(m=>{const tr=document.createElement("tr");addCell(tr,fmtDateTime(m.fechaHora));addCell(tr,m.tipo||"—");addCell(tr,m.codigo);addCell(tr,m.serial||"—");addCell(tr,m.nombre);addCell(tr,m.tipoAccion);addCell(tr,String(m.cantidad));addCell(tr,m.espacioDestino||"—");addCell(tr,m.usuario||"—");body.appendChild(tr)});
+  data.forEach(m=>{
+    const tr=document.createElement("tr");addCell(tr,fmtDateTime(m.fechaHora));addCell(tr,m.tipo||"—");addCell(tr,m.codigo);addCell(tr,m.serial||"—");addCell(tr,m.nombre);
+    const reverted=Number(m.cantidadRevertida)||0;
+    const actionTd=document.createElement("td"); actionTd.append(makeEl("span",m.tipoAccion));
+    if(reverted>0) actionTd.append(makeEl("small",reverted>=m.cantidad?" · revertida":` · revertida ${reverted} de ${m.cantidad}`,"reverted-note"));
+    if(m.motivo) actionTd.title=m.motivo;
+    tr.appendChild(actionTd);
+    addCell(tr,String(m.cantidad));addCell(tr,m.espacioDestino||"—");addCell(tr,m.usuario||"—");
+    const act=document.createElement("td"); act.className="actions";
+    if(canRevertMovement(m)) act.append(button("fa-rotate-left","Revertir","transfer",()=>openRevertModal(m),"Revertir salida (devolver al stock)"));
+    tr.appendChild(act);
+    body.appendChild(tr);
+  });
   $("movementCount").textContent=`${data.length} movimientos`;
+}
+
+/* ---------- Reversión de salidas ---------- */
+let pendingRevert=null;
+function canRevertMovement(m){
+  return can("movimientos") && m._key && m.tipo==="Consumible" && /^Salida/.test(String(m.tipoAccion||""))
+    && (Number(m.cantidad)||0)-(Number(m.cantidadRevertida)||0)>0
+    && inventario.some(i=>i.tipo==="Consumible" && normalizedKey(i.codigo)===normalizedKey(m.codigo));
+}
+function openRevertModal(m){
+  const remaining=(Number(m.cantidad)||0)-(Number(m.cantidadRevertida)||0);
+  pendingRevert={key:m._key,codigo:m.codigo};
+  $("revertItemName").textContent=m.nombre||"Artículo";
+  $("revertItemInfo").textContent=`Salida del ${fmtDateTime(m.fechaHora)} · ${m.cantidad} unidad${m.cantidad===1?"":"es"} hacia ${m.espacioDestino||"—"}${m.cantidadRevertida?` · ya revertidas: ${m.cantidadRevertida}`:""}`;
+  $("revertQuantity").value=String(remaining); $("revertQuantity").max=String(remaining);
+  $("revertReason").value="";
+  $("revertModal").hidden=false; $("revertModal").setAttribute("aria-hidden","false");
+  setTimeout(()=>$("revertQuantity").focus(),50);
+}
+function closeRevertModal(){ pendingRevert=null; $("revertModal").hidden=true; $("revertModal").setAttribute("aria-hidden","true"); }
+
+async function submitRevert(event){
+  event.preventDefault();
+  if(!pendingRevert || !allowed("movimientos")) return;
+  const qty=safeInt($("revertQuantity").value);
+  const motivo=sanitizeText($("revertReason").value,200);
+  if(qty===null || qty<1){showToast("La cantidad debe ser un número entero mayor que 0.",true);return;}
+  const {key,codigo}=pendingRevert;
+  const item=inventario.find(i=>i.tipo==="Consumible" && normalizedKey(i.codigo)===normalizedKey(codigo));
+  if(!item){showToast("El consumible ya no existe en el inventario (revise la papelera).",true);return;}
+  try{
+    // 1) Marcar la salida como revertida sin exceder su cantidad (transacción)
+    let original=null;
+    const mark=await runTransaction(ref(db,`movimientos/${key}`),current=>{
+      if(!current) return;
+      const total=safeInt(current.cantidad)??0, done=safeInt(current.cantidadRevertida)??0;
+      if(done+qty>total) return;
+      original=current;
+      return {...current,cantidadRevertida:done+qty,fechaReversion:Date.now(),revertidaPor:currentUserName()};
+    });
+    if(!mark.committed) throw new Error("La cantidad supera lo pendiente por revertir de esa salida.");
+    // 2) Devolver al stock (transacción)
+    const stock=await runTransaction(ref(db,`inventario/${item.idFirebase}`),current=>{
+      if(!current) return;
+      const s=safeInt(current.stockActual); if(s===null) return;
+      return {...current,stockActual:s+qty,fechaUltimaModificacion:Date.now(),updatedAt:Date.now()};
+    });
+    if(!stock.committed){
+      await runTransaction(ref(db,`movimientos/${key}`),current=>current?{...current,cantidadRevertida:Math.max(0,(safeInt(current.cantidadRevertida)??0)-qty)}:current);
+      throw new Error("No se pudo devolver el stock. Intente nuevamente.");
+    }
+    const finalStock=safeInt(stock.snapshot.val()?.stockActual);
+    // 3) Registrar el movimiento de reversión en el historial
+    const movement={fechaHora:Date.now(),tipo:"Consumible",codigo:sanitizeText(item.codigo,LIMITS.codigo),serial:sanitizeText(item.serial,LIMITS.serial),nombre:sanitizeText(item.nombre,LIMITS.nombre),
+      tipoAccion:"Reversión de salida",cantidad:qty,espacioDestino:sanitizeText(original?.espacioDestino,LIMITS.espacio),usuario:currentUserName(),refSalida:key,motivo};
+    const movementRef=push(movimientosRef);
+    await set(movementRef,movement);
+    withTimeout(setDoc(doc(firestore,"movimientos",movementRef.key),{...movement,idEvento:movementRef.key})).catch(()=>{});
+    syncFirestoreAsset({...item,stockActual:finalStock??item.stockActual,idFirebase:item.idFirebase},item.idFirebase);
+    closeRevertModal();
+    showToast(`Salida revertida: ${qty} unidad${qty===1?"":"es"} devuelta${qty===1?"":"s"} al stock.`);
+  }catch(error){
+    console.error("Reversión de salida:",error);
+    showToast(error.message||"No se pudo revertir la salida.",true);
+  }
 }
 
 function normalizeDateInputValue(value) {
@@ -1907,7 +1985,7 @@ startTrashListener();
 onValue(inventarioRef,snapshot=>{const data=snapshot.val()||{};renderizarInventario(Object.entries(data).map(([id,v])=>({...(v||{}),idFirebase:id})));},err=>{setSync("Error de conexión","error");showToast("Firebase rechazó la lectura. Revise las reglas.",true)});
 onValue(movimientosRef,snapshot=>{
   const data=snapshot.val()||{};
-  const rtdbMovements=Object.entries(data).map(([key,m])=>({idEvento:sanitizeText((m&&m.idEvento)||key,80),fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:safeInt(m.cantidad)??0,espacioDestino:sanitizeText(m.espacioDestino,120),usuario:sanitizeText(m.usuario,60)}));
+  const rtdbMovements=Object.entries(data).map(([key,m])=>({_key:key,cantidadRevertida:safeInt(m?.cantidadRevertida)??0,refSalida:sanitizeText(m?.refSalida,80),motivo:sanitizeText(m?.motivo,200),idEvento:sanitizeText((m&&m.idEvento)||key,80),fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:safeInt(m.cantidad)??0,espacioDestino:sanitizeText(m.espacioDestino,120),usuario:sanitizeText(m.usuario,60)}));
   const firestoreMovements=movimientos.filter(m=>m.__firestore===true);
   movimientos=[...rtdbMovements,...firestoreMovements].filter((m,index,arr)=>!m.idEvento || arr.findIndex(x=>x.idEvento===m.idEvento)===index);
   renderMovements();renderInventoryTable();renderGeneralInventoryTable();renderAnalytics();
@@ -1923,6 +2001,11 @@ try {
 } catch(error) { console.warn("No se pudo inicializar el listener de movimientos de Firestore.",error); }
 }
 initAuth(db,startRealtime);
+$("revertForm").addEventListener("submit",submitRevert);
+$("closeRevertBtn").addEventListener("click",closeRevertModal);
+$("cancelRevertBtn").addEventListener("click",closeRevertModal);
+$("revertModal").addEventListener("click",e=>{if(e.target===$("revertModal"))closeRevertModal();});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("revertModal").hidden)closeRevertModal();});
 document.querySelector("#analyticsTopSpace")?.closest(".analytics-card")?.addEventListener("click",e=>{
   const space=e.currentTarget.dataset.space; if(!space) return;
   expandedSpaces.add(space); renderAnalytics();

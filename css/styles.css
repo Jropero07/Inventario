@@ -1747,3 +1747,4 @@ body.auth-locked .app-shell { display: none; }
 .space-detail-row small { color: var(--muted); white-space: nowrap; }
 .analytics-card.clickable { cursor: pointer; }
 .analytics-card.clickable:hover { border-color: var(--blue); }
+.reverted-note { color: var(--warn); font-weight: 700; }

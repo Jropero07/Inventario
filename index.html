@@ -250,13 +250,13 @@
           <input id="movementDateFrom" type="date" title="Fecha desde">
           <input id="movementDateTo" type="date" title="Fecha hasta">
           <select id="movementType"><option value="">Todos los tipos</option><option value="Activo">Activo</option><option value="Consumible">Consumible</option></select>
-          <select id="movementAction"><option value="">Todas las acciones</option><option value="Entrada">Entrada</option><option value="Salida">Salida</option><option value="Registro">Registro</option><option value="Edición">Edición</option><option value="Eliminación">Eliminación</option><option value="Restauración">Restauración</option></select>
+          <select id="movementAction"><option value="">Todas las acciones</option><option value="Entrada">Entrada</option><option value="Salida">Salida</option><option value="Registro">Registro</option><option value="Edición">Edición</option><option value="Eliminación">Eliminación</option><option value="Restauración">Restauración</option><option value="Reversión">Reversión de salida</option></select>
           <input id="movementSearchDestination" type="search" placeholder="Buscar destino / lugar...">
           <input id="movementSearchUser" type="search" placeholder="Buscar por usuario...">
           <button id="clearMovementFiltersBtn" class="btn secondary" type="button"><i class="fa-solid fa-eraser" aria-hidden="true"></i><span>Limpiar filtros</span></button>
         </div>
         <div class="table-card"><div class="table-wrap">
-          <table><thead><tr><th>Fecha / Hora</th><th>Tipo</th><th>SKU / Código</th><th>Serial</th><th>Nombre</th><th>Acción</th><th>Cantidad</th><th>Espacio / Destino</th><th>Usuario</th></tr></thead>
+          <table><thead><tr><th>Fecha / Hora</th><th>Tipo</th><th>SKU / Código</th><th>Serial</th><th>Nombre</th><th>Acción</th><th>Cantidad</th><th>Espacio / Destino</th><th>Usuario</th><th>Acciones</th></tr></thead>
           <tbody id="movementTableBody"></tbody></table>
         </div><p id="movementCount" class="table-note">0 movimientos</p></div>
       </section>
@@ -341,6 +341,18 @@
       </div>
       <div id="orderDocument" class="order-document"></div>
       <div class="modal-actions"><button id="downloadOrderPdfBtn" class="btn primary"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i><span>Descargar PDF</span></button><button id="downloadOrderWordBtn" class="btn secondary"><i class="fa-solid fa-file-word" aria-hidden="true"></i><span>Descargar Word</span></button></div>
+    </div>
+  </div>
+
+  <div id="revertModal" class="modal-backdrop" hidden aria-hidden="true">
+    <div class="modal transfer-modal" role="dialog" aria-modal="true" aria-labelledby="revertTitle">
+      <div class="modal-head"><h3 id="revertTitle">Revertir salida</h3><button id="closeRevertBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
+      <form id="revertForm" class="movement-form" novalidate>
+        <div class="movement-info"><strong id="revertItemName">Artículo</strong><span id="revertItemInfo"></span></div>
+        <div class="field"><label for="revertQuantity">Cantidad a devolver al stock</label><input id="revertQuantity" type="number" min="1" step="1" inputmode="numeric" required></div>
+        <div class="field"><label for="revertReason">Motivo <span class="optional-label">(opcional)</span></label><input id="revertReason" maxlength="200" placeholder="Ej. No se utilizó, error de registro"></div>
+        <div class="modal-actions"><button id="cancelRevertBtn" type="button" class="btn secondary"><i class="fa-solid fa-xmark" aria-hidden="true"></i><span>Cancelar</span></button><button type="submit" class="btn primary"><i class="fa-solid fa-rotate-left" aria-hidden="true"></i><span>Revertir salida</span></button></div>
+      </form>
     </div>
   </div>
 
