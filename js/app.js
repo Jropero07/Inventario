@@ -1407,7 +1407,7 @@ function monthLabel(value){
   const m=String(value||"").match(/^(\d{4})-(\d{2})$/);
   if(!m) return "";
   const name=MONTHS_ES[Number(m[2])-1]||"";
-  return name ? `${name.charAt(0).toUpperCase()}${name.slice(1)} ${m[1]}` : "";
+  return name ? `${name.charAt(0).toUpperCase()}${name.slice(1)}` : "";
 }
 function dateLabel(value){
   const m=String(value||"").match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -1427,16 +1427,22 @@ function getOrderMeta(){
 }
 
 function orderSpecs(item){
-  return [[item.marca,item.modelo].filter(Boolean).join(" "),item.especificaciones,item.unidad && !/^unidad(es)?$/i.test(item.unidad)?`Unidad: ${item.unidad}`:""].map(x=>sanitizeText(x,300)).filter(Boolean).join(" · ");
+  return [item.especificaciones,[item.marca,item.modelo].filter(Boolean).join(" ")].map(x=>sanitizeText(x,300)).filter(Boolean).join(" · ");
 }
 
-/* Uso sugerido: reposición de stock + los espacios que más consumen el artículo según las salidas registradas */
-function suggestedOrderUse(item){
-  const totals=new Map();
-  movimientos.filter(m=>/^Salida/.test(String(m.tipoAccion||"")) && m.codigo===item.codigo && m.espacioDestino)
-    .forEach(m=>totals.set(m.espacioDestino,(totals.get(m.espacioDestino)||0)+(Number(m.cantidad)||0)));
-  const top=[...totals.entries()].sort((a,b)=>b[1]-a[1]).slice(0,2).map(([space])=>space);
-  return top.length ? `Reposición de stock – ${top.join(", ")}` : "Reposición de stock";
+/* Uso: lugar o fin al que se destina el material (Plantel, CCTV, Oficinas...). Por defecto "Plantel", editable por fila */
+const ORDER_DEFAULT_USE="Plantel";
+const ORDER_USE_OPTIONS=["Plantel","CCTV","Oficinas","Paraninfo","Sala de sistemas","Bodega TIC"];
+
+/* Cantidad con unidad, como en el formato: "12 unds", "1 caja", "2 bolsas" */
+function orderQuantityText(qty,unidad){
+  const u=sanitizeText(unidad,40).toLowerCase();
+  const one=qty===1;
+  if(!u || /^unidad(es)?$|^und/.test(u)) return `${qty} ${one?"und":"unds"}`;
+  if(/^metros?$|^mts?$/.test(u)) return `${qty} ${one?"mt":"mts"}`;
+  if(one) return `${qty} ${u.replace(/(es|s)$/,"") || u}`;
+  if(/s$/.test(u)) return `${qty} ${u}`;
+  return `${qty} ${u}${/[aeiouáéíóú]$/.test(u)?"s":"es"}`;
 }
 
 function orderLines(){
@@ -1445,7 +1451,7 @@ function orderLines(){
     descripcion:item.nombre,
     especificaciones:orderSpecs(item),
     cantidad:orderQuantities.get(item.idFirebase)||suggestedOrderQuantity(item),
-    uso:orderUses.has(item.idFirebase)?orderUses.get(item.idFirebase):suggestedOrderUse(item)
+    uso:orderUses.has(item.idFirebase)?orderUses.get(item.idFirebase):ORDER_DEFAULT_USE
   }));
 }
 
@@ -1502,16 +1508,20 @@ function buildOrderDocument() {
     tr.appendChild(el("td",line?line.especificaciones:""));
     const qtyTd=el("td","","fmt-center"), useTd=document.createElement("td");
     if(line){
-      const input=document.createElement("input"); input.type="number"; input.min="1"; input.step="1"; input.inputMode="numeric"; input.className="order-quantity"; input.value=String(line.cantidad); input.setAttribute("aria-label",`Cantidad solicitada para ${line.descripcion}`);
-      input.addEventListener("input",()=>{const q=safeInt(input.value);if(q!==null&&q>=1)orderQuantities.set(line.item.idFirebase,q);});
-      qtyTd.appendChild(input);
-      const use=document.createElement("textarea"); use.rows=2; use.maxLength=120; use.className="order-use"; use.value=line.uso; use.setAttribute("aria-label",`Uso de ${line.descripcion}`);
+      const input=document.createElement("input"); input.type="number"; input.min="1"; input.step="1"; input.inputMode="numeric"; input.className="order-quantity"; input.dataset.unit=line.item.unidad||""; input.value=String(line.cantidad); input.setAttribute("aria-label",`Cantidad solicitada para ${line.descripcion}`);
+      const unit=makeEl("span",orderQuantityText(line.cantidad,line.item.unidad).replace(/^\d+\s*/,""),"order-unit");
+      input.addEventListener("input",()=>{const q=safeInt(input.value);if(q!==null&&q>=1){orderQuantities.set(line.item.idFirebase,q);unit.textContent=orderQuantityText(q,line.item.unidad).replace(/^\d+\s*/,"");}});
+      qtyTd.append(input,unit);
+      const use=document.createElement("input"); use.type="text"; use.maxLength=120; use.setAttribute("list","orderUseOptions"); use.className="order-use"; use.value=line.uso; use.setAttribute("aria-label",`Uso de ${line.descripcion}`);
       use.addEventListener("input",()=>orderUses.set(line.item.idFirebase,sanitizeText(use.value,120)));
       useTd.appendChild(use);
     }
     tr.append(qtyTd,el("td","","fmt-center"),useTd);
     table.appendChild(tr);
   }
+  const useList=document.createElement("datalist"); useList.id="orderUseOptions";
+  [...new Set([...ORDER_USE_OPTIONS,...inventario.map(i=>i.espacio).filter(Boolean)])].forEach(v=>{const o=document.createElement("option");o.value=v;useList.appendChild(o);});
+  page.appendChild(useList);
   page.appendChild(table);
   if(!lines.length) page.appendChild(el("p","No hay artículos para el filtro de alertas seleccionado.","fmt-empty"));
 
@@ -1532,7 +1542,7 @@ function openOrder(){
   $("orderSolicitante").value=getCurrentUser()?.nombre||"";
   $("orderCentroCostos").value="";
   $("orderMesDesde").value=monthInput(0);
-  $("orderMesHasta").value=monthInput(0);
+  $("orderMesHasta").value="";
   buildOrderDocument();
   $("orderModal").hidden=false;
   $("orderModal").setAttribute("aria-hidden","false");
@@ -1634,7 +1644,7 @@ async function exportOrderWord(){
       const cells=wChildren(rows[n],"tc");
       setWordCellText(xml,cells[1],line.descripcion);
       setWordCellText(xml,cells[2],line.especificaciones);
-      setWordCellText(xml,cells[3],String(line.cantidad));
+      setWordCellText(xml,cells[3],orderQuantityText(line.cantidad,line.item.unidad));
       setWordCellText(xml,cells[4],"");
       setWordCellText(xml,cells[5],line.uso);
     });
@@ -1653,8 +1663,10 @@ function exportOrderPdf(){
   clone.querySelectorAll("input, textarea").forEach((input,i)=>{
     const original=source.querySelectorAll("input, textarea")[i];
     const span=document.createElement("span"); span.textContent=original?original.value:input.value;
+    if(original && original.dataset.unit!==undefined){ const q=safeInt(original.value); span.textContent=q?orderQuantityText(q,original.dataset.unit):original.value; }
     input.replaceWith(span);
   });
+  clone.querySelectorAll(".order-unit, datalist").forEach(el=>el.remove());
   clone.classList.add("order-document-print");
   html2pdf().set({margin:0,filename:`Pedido_materiales_${$("orderFecha").value||todayInput()}.pdf`,html2canvas:{scale:2},jsPDF:{unit:"mm",format:"letter"}}).from(clone).save();
 }
