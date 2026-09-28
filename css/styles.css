@@ -1724,3 +1724,26 @@ body.auth-locked .app-shell { display: none; }
 .order-document-print .fmt-page { min-height: 245mm; }
 .order-unit { margin-left: 4px; }
 .fmt-items td input.order-quantity { width: 52px; min-width: 0; display: inline-block; }
+
+/* Top espacios desplegable */
+.analytics-list-card li.space-item { display: block; padding: 0; }
+.space-toggle {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+.space-toggle:hover strong { color: var(--blue); }
+.space-toggle i { font-size: 11px; width: 12px; }
+.space-detail { margin: 0 0 8px 18px; padding: 6px 10px; border-left: 3px solid var(--blue); background: #ffffff; border-radius: 6px; }
+.space-detail-row { display: flex; justify-content: space-between; gap: 10px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+.space-detail-row:last-child { border-bottom: 0; }
+.space-detail-row small { color: var(--muted); white-space: nowrap; }
+.analytics-card.clickable { cursor: pointer; }
+.analytics-card.clickable:hover { border-color: var(--blue); }

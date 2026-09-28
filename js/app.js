@@ -730,48 +730,79 @@ function movementBadge(item) {
   return formatActivityBadge(item);
 }
 
+const expandedSpaces=new Set();
+
 function renderAnalytics() {
   const consumables=inventario.filter(i=>i.tipo==="Consumible");
   const exits=movimientos.filter(m=>m.tipo==="Consumible" && /^Salida/.test(String(m.tipoAccion||"")));
-  const itemTotals=new Map(), spaceTotals=new Map(), pairTotals=new Map();
+  const itemKey=x=>normalizedKey(x.codigo)||`N:${String(x.nombre||"").trim().toUpperCase()}`;
+  const nameByKey=new Map(consumables.map(i=>[itemKey(i),i.nombre]));
+  const itemTotals=new Map(), spaceTotals=new Map(), pairTotals=new Map(), spaceItems=new Map();
   const ninetyDaysAgo=Date.now()-90*86400000;
-  const recentItemTotals=new Map();
+  const recent=new Map(); // clave de artículo -> {qty, count}
   for(const m of exits){
     const qty=Math.max(0,Number(m.cantidad)||0); if(!qty) continue;
-    const itemName=sanitizeText(m.nombre,140)||"Sin nombre";
+    const key=itemKey(m);
+    const itemName=nameByKey.get(key)||sanitizeText(m.nombre,140)||"Sin nombre";
     const space=sanitizeText(m.espacioDestino,120)||"Sin destino registrado";
-    itemTotals.set(itemName,(itemTotals.get(itemName)||0)+qty);
+    const ts=Number(m.fechaHora)||0;
+    const it=itemTotals.get(key)||{name:itemName,qty:0}; it.qty+=qty; itemTotals.set(key,it);
     spaceTotals.set(space,(spaceTotals.get(space)||0)+qty);
-    const pairKey=`${space}||${itemName}`;
+    const pairKey=`${space}||${key}`;
     const pair=pairTotals.get(pairKey)||{space,item:itemName,qty:0}; pair.qty+=qty; pairTotals.set(pairKey,pair);
-    if((Number(m.fechaHora)||0)>=ninetyDaysAgo) recentItemTotals.set(itemName,(recentItemTotals.get(itemName)||0)+qty);
+    const perSpace=spaceItems.get(space)||new Map();
+    const detail=perSpace.get(key)||{name:itemName,qty:0,count:0,last:0}; detail.qty+=qty; detail.count+=1; detail.last=Math.max(detail.last,ts); perSpace.set(key,detail); spaceItems.set(space,perSpace);
+    if(ts>=ninetyDaysAgo){ const r=recent.get(key)||{qty:0,count:0}; r.qty+=qty; r.count+=1; recent.set(key,r); }
   }
-  const topItem=[...itemTotals.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],"es"))[0];
+  const topItem=[...itemTotals.values()].sort((a,b)=>b.qty-a.qty||a.name.localeCompare(b.name,"es"))[0];
   const topSpace=[...spaceTotals.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],"es"))[0];
   const topPair=[...pairTotals.values()].sort((a,b)=>b.qty-a.qty||a.item.localeCompare(b.item,"es"))[0];
-  $("analyticsTopItem").textContent=topItem?topItem[0]:"—";
-  $("analyticsTopItemDetail").textContent=topItem?`${topItem[1]} unidades salidas`:"Sin salidas registradas";
+  $("analyticsTopItem").textContent=topItem?topItem.name:"—";
+  $("analyticsTopItemDetail").textContent=topItem?`${topItem.qty} unidades salidas`:"Sin salidas registradas";
   $("analyticsTopSpace").textContent=topSpace?topSpace[0]:"—";
-  $("analyticsTopSpaceDetail").textContent=topSpace?`${topSpace[1]} unidades demandadas`:"Sin demanda registrada";
+  $("analyticsTopSpaceDetail").textContent=topSpace?`${topSpace[1]} unidades demandadas · clic para ver artículos`:"Sin demanda registrada";
+  $("analyticsTopSpace").closest(".analytics-card").classList.toggle("clickable",!!topSpace);
+  $("analyticsTopSpace").closest(".analytics-card").dataset.space=topSpace?topSpace[0]:"";
   $("analyticsTopPair").textContent=topPair?`${topPair.space} → ${topPair.item}`:"—";
   $("analyticsTopPairDetail").textContent=topPair?`${topPair.qty} unidades`:"Sin relación registrada";
 
-  const rotation=[...consumables].map(item=>({item,total:recentItemTotals.get(item.nombre)||0})).sort((a,b)=>b.total-a.total||a.item.nombre.localeCompare(b.item.nombre,"es"));
-  const high=rotation.filter(x=>x.total>=5).length, medium=rotation.filter(x=>x.total>=2&&x.total<5).length, low=rotation.filter(x=>x.total<2).length;
+  const rotation=consumables.map(item=>({item,...(recent.get(itemKey(item))||{qty:0,count:0})}))
+    .sort((a,b)=>b.qty-a.qty||b.count-a.count||a.item.nombre.localeCompare(b.item.nombre,"es"));
+  const level=q=>q>=5?"Alta":q>=2?"Media":"Baja";
+  const high=rotation.filter(x=>x.qty>=5).length, medium=rotation.filter(x=>x.qty>=2&&x.qty<5).length, low=rotation.filter(x=>x.qty<2).length;
   $("analyticsRotationSummary").textContent=rotation.length?`${high} alta · ${medium} media · ${low} baja`:"—";
-  $("analyticsRotationDetail").textContent="Clasificación según salidas acumuladas en los últimos 90 días (≥5 alta, 2–4 media, 0–1 baja).";
+  $("analyticsRotationDetail").textContent="Según unidades salidas en los últimos 90 días (≥5 alta, 2–4 media, 0–1 baja).";
 
-  const topSpaces=[...spaceTotals.entries()].sort((a,b)=>b[1]-a[1]).slice(0,3);
+  const topSpaces=[...spaceTotals.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],"es")).slice(0,3);
   const list=$("analyticsTopSpacesList"); list.replaceChildren();
   if(!topSpaces.length) list.appendChild(makeEl("li","Sin salidas registradas.","muted"));
-  else topSpaces.forEach(([space,qty])=>{const li=document.createElement("li");li.append(makeEl("strong",space),makeEl("span",`${qty} unidades`));list.appendChild(li);});
+  else topSpaces.forEach(([space,qty])=>{
+    const li=document.createElement("li"); li.className="space-item";
+    const open=expandedSpaces.has(space);
+    const head=document.createElement("button"); head.type="button"; head.className="space-toggle"; head.setAttribute("aria-expanded",String(open));
+    head.title="Ver artículos entregados en este espacio";
+    const icon=document.createElement("i"); icon.className=`fa-solid ${open?"fa-chevron-down":"fa-chevron-right"}`; icon.setAttribute("aria-hidden","true");
+    const name=makeEl("strong",space); name.prepend(icon," ");
+    head.append(name,makeEl("span",`${qty} unidades`));
+    head.addEventListener("click",()=>{ if(expandedSpaces.has(space)) expandedSpaces.delete(space); else expandedSpaces.add(space); renderAnalytics(); });
+    li.appendChild(head);
+    if(open){
+      const detail=document.createElement("div"); detail.className="space-detail";
+      [...(spaceItems.get(space)||new Map()).values()].sort((a,b)=>b.qty-a.qty||a.name.localeCompare(b.name,"es")).forEach(d=>{
+        const row=document.createElement("div"); row.className="space-detail-row";
+        row.append(makeEl("span",d.name),makeEl("small",`${d.qty} ${d.qty===1?"und":"unds"} · ${d.count} ${d.count===1?"salida":"salidas"} · última: ${d.last?new Date(d.last).toLocaleDateString("es-CO"):"—"}`));
+        detail.appendChild(row);
+      });
+      li.appendChild(detail);
+    }
+    list.appendChild(li);
+  });
 
   const rotList=$("analyticsRotationList"); rotList.replaceChildren();
   if(!rotation.length) rotList.appendChild(makeEl("span","Sin consumibles registrados.","muted"));
-  rotation.slice(0,8).forEach(({item,total})=>{
-    const level=total>=5?"Alta":total>=2?"Media":"Baja";
+  rotation.slice(0,8).forEach(({item,qty,count})=>{
     const row=document.createElement("div"); row.className="rotation-row";
-    row.append(makeEl("span",item.nombre),makeEl("strong",`${level} · ${total} salidas`)); rotList.appendChild(row);
+    row.append(makeEl("span",item.nombre),makeEl("strong",`${level(qty)} · ${qty} ${qty===1?"und":"unds"} · ${count} ${count===1?"salida":"salidas"}`)); rotList.appendChild(row);
   });
 }
 
@@ -1892,6 +1923,11 @@ try {
 } catch(error) { console.warn("No se pudo inicializar el listener de movimientos de Firestore.",error); }
 }
 initAuth(db,startRealtime);
+document.querySelector("#analyticsTopSpace")?.closest(".analytics-card")?.addEventListener("click",e=>{
+  const space=e.currentTarget.dataset.space; if(!space) return;
+  expandedSpaces.add(space); renderAnalytics();
+  $("analyticsTopSpacesList").scrollIntoView({behavior:"smooth",block:"nearest"});
+});
 function startTrashListener(){
   if(!can("eliminar")) return;
   onValue(papeleraRef,snapshot=>{const data=snapshot.val()||{};papelera=Object.entries(data).map(([id,v])=>({...normalizeItem({...(v||{}),idFirebase:id}),eliminadoPor:sanitizeText(v?.eliminadoPor,60),fechaEliminacion:Number(v?.fechaEliminacion)||0}));renderPapelera();},error=>console.warn("No se pudo leer la papelera.",error));
