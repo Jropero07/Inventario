@@ -1549,53 +1549,97 @@ function openOrder(){
 }
 function closeOrder(){$("orderModal").hidden=true;$("orderModal").setAttribute("aria-hidden","true");}
 
-function exportRows(){
-  return filteredInventory().sort(sortInventory).map(i=>({
-    Tipo:i.tipo,
-    Código:i.codigo,
-    Nombre:i.nombre,
-    Categoría:i.categoria,
-    Marca:i.marca,
-    Modelo:i.modelo,
-    Serial:i.serial,
-    Estado:i.estado,
-    "Espacio Físico / Ubicación":displayLocation(i),
-    Responsable:i.responsable,
-    Unidad:i.unidad,
-    Stock:i.tipo==="Consumible"?i.stockActual:"",
-    "Stock Mínimo":i.tipo==="Consumible"?i.stockMinimo:"",
-    "Prioridad de Alerta":i.tipo==="Consumible"?i.prioridadAlerta:"",
-    "Fecha de Ingreso":i.fechaIngreso,
-    "Fecha de Asignación":i.fechaAsignacion,
-    Especificaciones:i.especificaciones
-  }));
+/* Exportación inteligente: solo columnas con datos y relevantes al filtro aplicado */
+const EXPORT_COLUMNS=[
+  {key:"Tipo",filter:"filterType",get:i=>i.tipo,w:12},
+  {key:"Código",always:true,get:i=>i.codigo,w:18},
+  {key:"Nombre",always:true,get:i=>i.nombre,w:32},
+  {key:"Categoría",filter:"filterCategory",get:i=>i.categoria,w:18},
+  {key:"Marca",get:i=>i.marca,w:16},
+  {key:"Modelo",get:i=>i.modelo,w:18},
+  {key:"Serial",get:i=>i.serial,w:22},
+  {key:"Estado",filter:"filterStatus",only:"Activo",get:i=>i.tipo==="Activo"?i.estado:"",w:16},
+  {key:"Espacio / Ubicación",filter:"filterSpace",get:i=>displayLocation(i),w:28},
+  {key:"Responsable",only:"Activo",get:i=>i.tipo==="Activo"?i.responsable:"",w:24},
+  {key:"Fecha de Asignación",only:"Activo",get:i=>i.tipo==="Activo"?i.fechaAsignacion:"",w:16},
+  {key:"Unidad",only:"Consumible",get:i=>i.tipo==="Consumible"?i.unidad:"",w:12},
+  {key:"Stock",only:"Consumible",get:i=>i.tipo==="Consumible"?i.stockActual:"",w:10},
+  {key:"Stock Mínimo",only:"Consumible",get:i=>i.tipo==="Consumible"?i.stockMinimo:"",w:12},
+  {key:"Prioridad de Alerta",only:"Consumible",get:i=>i.tipo==="Consumible"?i.prioridadAlerta:"",w:14},
+  {key:"Fecha de Ingreso",get:i=>i.fechaIngreso,w:14},
+  {key:"Especificaciones",get:i=>i.especificaciones,w:40}
+];
+
+function exportFiltersSummary(){
+  const parts=[];
+  const q=sanitizeText($("generalSearch").value,120);
+  if(q) parts.push(`Búsqueda: "${q}"`);
+  [["filterType","Tipo"],["filterStatus","Estado"],["filterCategory","Categoría"],["filterSpace","Espacio"]].forEach(([id,label])=>{const v=$(id).value;if(v)parts.push(`${label}: ${v}`);});
+  return parts;
+}
+
+function exportData(){
+  const items=filteredInventory().sort(sortInventory);
+  const type=$("filterType").value;
+  const isEmpty=v=>v===undefined||v===null||String(v).trim()==="";
+  const columns=EXPORT_COLUMNS.filter(col=>{
+    if(col.always) return true;
+    if(col.filter && $(col.filter).value) return false;           // el filtro ya fija ese valor: va en el encabezado
+    if(col.only && type && type!==col.only) return false;          // campo propio del otro tipo
+    return items.some(i=>!isEmpty(col.get(i)));                    // sin datos en ningún registro: se omite
+  });
+  const rows=items.map(i=>Object.fromEntries(columns.map(col=>[col.key,col.get(i)??""])));
+  return {columns,rows,filters:exportFiltersSummary()};
+}
+
+function exportFileName(ext){
+  const type=$("filterType").value;
+  const d=new Date(); const stamp=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  return `inventario_${type?type.toLowerCase()+"s_":"general_"}${stamp}.${ext}`;
 }
 
 function exportExcel(){
-  const rows=exportRows();
-  const ws=XLSX.utils.json_to_sheet(rows);
-  ws["!cols"]=[18,18,32,20,18,20,22,20,30,25,15,12,14,16,16].map(w=>({wch:w}));
+  const {columns,rows,filters}=exportData();
+  if(!rows.length){showToast("No hay registros para exportar con los filtros actuales.",true);return;}
+  const header=[["Inventario General"],[`Exportado: ${new Date().toLocaleString("es-CO")} · ${rows.length} registros${filters.length?" · "+filters.join(" · "):""}`],[]];
+  const ws=XLSX.utils.aoa_to_sheet(header);
+  XLSX.utils.sheet_add_json(ws,rows,{origin:"A4",header:columns.map(c=>c.key)});
+  ws["!cols"]=columns.map(c=>({wch:c.w}));
+  ws["!autofilter"]={ref:XLSX.utils.encode_range({s:{r:3,c:0},e:{r:3+rows.length,c:columns.length-1}})};
   const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,ws,"Inventario General");
-  XLSX.writeFile(wb,"inventario_general.xlsx");
+  XLSX.utils.book_append_sheet(wb,ws,"Inventario");
+  XLSX.writeFile(wb,exportFileName("xlsx"));
+}
+
+function exportCsv(){
+  const {columns,rows}=exportData();
+  if(!rows.length){showToast("No hay registros para exportar con los filtros actuales.",true);return;}
+  const esc=v=>{const t=String(v??"");return /[";\n\r]/.test(t)?`"${t.replace(/"/g,'""')}"`:t;};
+  const lines=[columns.map(c=>esc(c.key)).join(";"),...rows.map(r=>columns.map(c=>esc(r[c.key])).join(";"))];
+  saveAs(new Blob(["\ufeff"+lines.join("\r\n")],{type:"text/csv;charset=utf-8"}),exportFileName("csv"));
 }
 
 function exportPdf(){
-  const rows=exportRows();
+  const {columns,rows,filters}=exportData();
+  if(!rows.length){showToast("No hay registros para exportar con los filtros actuales.",true);return;}
+  const wide=columns.length>10;
   const wrap=document.createElement("div");
   wrap.style.background="#ffffff"; wrap.style.padding="18px"; wrap.style.color="#111111"; wrap.style.fontFamily="Arial,Helvetica,sans-serif";
+  wrap.style.width=wide?"1500px":(columns.length>6?"1050px":"760px");
   const title=makeEl("h2","Inventario General"); title.style.margin="0 0 4px"; wrap.appendChild(title);
-  const subtitle=makeEl("p",`Exportado: ${new Date().toLocaleString("es-CO")} · ${rows.length} registros`); subtitle.style.margin="0 0 14px"; subtitle.style.color="#555555"; wrap.appendChild(subtitle);
+  const subtitle=makeEl("p",`Exportado: ${new Date().toLocaleString("es-CO")} · ${rows.length} registros`); subtitle.style.margin="0 0 4px"; subtitle.style.color="#555555"; wrap.appendChild(subtitle);
+  if(filters.length){const f=makeEl("p",`Filtros: ${filters.join(" · ")}`);f.style.margin="0 0 12px";f.style.color="#0033cc";f.style.fontWeight="700";wrap.appendChild(f);} else subtitle.style.marginBottom="14px";
 
-  const table=document.createElement("table"); table.style.width="100%"; table.style.borderCollapse="collapse"; table.style.fontSize="9px";
-  const headers=["Tipo","Código","Nombre","Categoría","Marca","Modelo","Serial","Estado","Espacio / Ubicación","Responsable","Unidad","Stock","Stock Mínimo","Prioridad de Alerta","Fecha de Ingreso","Fecha de Asignación"];
+  const table=document.createElement("table"); table.style.width="100%"; table.style.borderCollapse="collapse"; table.style.fontSize=wide?"9px":"11px";
   const thead=document.createElement("thead"),hr=document.createElement("tr");
-  headers.forEach(h=>{const th=makeEl("th",h);th.style.border="1px solid #bfc7d4";th.style.padding="5px";th.style.background="#eef2f7";th.style.textAlign="left";hr.appendChild(th)}); thead.appendChild(hr); table.appendChild(thead);
+  columns.forEach(c=>{const th=makeEl("th",c.key);th.style.border="1px solid #bfc7d4";th.style.padding="5px";th.style.background="#eef2f7";th.style.textAlign="left";hr.appendChild(th)}); thead.appendChild(hr); table.appendChild(thead);
   const tbody=document.createElement("tbody");
-  rows.forEach(row=>{const tr=document.createElement("tr");headers.forEach(h=>{const td=makeEl("td",String(row[h]??""));td.style.border="1px solid #d6dbe3";td.style.padding="5px";td.style.verticalAlign="top";tr.appendChild(td)});tbody.appendChild(tr)});
+  rows.forEach(row=>{const tr=document.createElement("tr");tr.style.pageBreakInside="avoid";columns.forEach(c=>{const td=makeEl("td",String(row[c.key]??""));td.style.border="1px solid #d6dbe3";td.style.padding="5px";td.style.verticalAlign="top";tr.appendChild(td)});tbody.appendChild(tr)});
   table.appendChild(tbody); wrap.appendChild(table);
 
-  html2pdf().set({margin:6,filename:"inventario_general.pdf",html2canvas:{scale:2},jsPDF:{orientation:"landscape",unit:"mm",format:"a3"},pagebreak:{mode:["avoid-all","css","legacy"]}}).from(wrap).save();
+  const format=wide?"a3":(columns.length>6?"letter":"letter");
+  const orientation=columns.length>6?"landscape":"portrait";
+  html2pdf().set({margin:8,filename:exportFileName("pdf"),html2canvas:{scale:2},jsPDF:{orientation,unit:"mm",format},pagebreak:{mode:["css","legacy"]}}).from(wrap).save();
 }
 
 const W_NS="http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -1824,7 +1868,7 @@ $("consumableForm").addEventListener("submit",async e=>{
 });
 $("cancelEditBtn").addEventListener("click",clearAssetForm);$("clearConsumableBtn").addEventListener("click",()=>{$("consumableForm").reset();$("cEditingId").value="";consumableEditingId="";});
 $("generateOrderBtn").addEventListener("click",openOrder);$("downloadOrderPdfBtn").addEventListener("click",exportOrderPdf);$("downloadOrderWordBtn").addEventListener("click",exportOrderWord);
-$("exportExcelBtn").addEventListener("click",exportExcel);$("exportPdfBtn").addEventListener("click",exportPdf);$("exportJsonBtn").addEventListener("click",exportJson);$("importJsonInput").addEventListener("change",e=>importJson(e.target.files[0]));
+$("exportExcelBtn").addEventListener("click",exportExcel);$("exportCsvBtn").addEventListener("click",exportCsv);$("exportPdfBtn").addEventListener("click",exportPdf);$("exportJsonBtn").addEventListener("click",exportJson);$("importJsonInput").addEventListener("change",e=>importJson(e.target.files[0]));
 window.addEventListener("beforeunload",()=>{if(scannerRunning&&scanner)scanner.stop().catch(()=>{})});
 
 function startRealtime(){
