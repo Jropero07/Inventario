@@ -349,6 +349,7 @@
       <div class="modal-head"><h3 id="revertTitle">Revertir salida</h3><button id="closeRevertBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
       <form id="revertForm" class="movement-form" novalidate>
         <div class="movement-info"><strong id="revertItemName">Artículo</strong><span id="revertItemInfo"></span></div>
+        <div class="field"><label for="revertDestination">Lugar al que retorna</label><input id="revertDestination" maxlength="120" required placeholder="Ej. BODEGA TIC"></div>
         <div class="field"><label for="revertQuantity">Cantidad a devolver al stock</label><input id="revertQuantity" type="number" min="1" step="1" inputmode="numeric" required></div>
         <div class="field"><label for="revertReason">Motivo <span class="optional-label">(opcional)</span></label><input id="revertReason" maxlength="200" placeholder="Ej. No se utilizó, error de registro"></div>
         <div class="modal-actions"><button id="cancelRevertBtn" type="button" class="btn secondary"><i class="fa-solid fa-xmark" aria-hidden="true"></i><span>Cancelar</span></button><button type="submit" class="btn primary"><i class="fa-solid fa-rotate-left" aria-hidden="true"></i><span>Revertir salida</span></button></div>

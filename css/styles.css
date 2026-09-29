@@ -1748,3 +1748,15 @@ body.auth-locked .app-shell { display: none; }
 .analytics-card.clickable { cursor: pointer; }
 .analytics-card.clickable:hover { border-color: var(--blue); }
 .reverted-note { color: var(--warn); font-weight: 700; }
+
+/* Escritura en mayúsculas en los campos que se guardan */
+#assetForm input:not([type=date]):not([type=number]),
+#consumableForm input:not([type=date]):not([type=number]),
+#editModal input:not([type=date]):not([type=number]),
+#editModal textarea,
+#cloneForm input:not([type=date]):not([type=number]),
+#cloneForm textarea,
+#movementDestination, #transferDestination, #revertDestination, #revertReason,
+#lifecycleNote, #userFullName, #setupName, #forgotReason {
+  text-transform: uppercase;
+}

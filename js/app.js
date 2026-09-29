@@ -79,22 +79,22 @@ function normalizeItem(raw) {
   const item = {
     idFirebase: raw.idFirebase || "",
     tipo: raw.tipo === "Consumible" ? "Consumible" : "Activo",
-    codigo: sanitizeText(raw.codigo, LIMITS.codigo),
-    nombre: sanitizeText(raw.nombre, LIMITS.nombre),
-    categoria: sanitizeText(raw.categoria, LIMITS.categoria),
-    marca: sanitizeText(raw.marca, LIMITS.marca),
-    modelo: sanitizeText(raw.modelo, LIMITS.modelo),
-    serial: sanitizeText(raw.serial, LIMITS.serial),
+    codigo: upperText(raw.codigo, LIMITS.codigo),
+    nombre: upperText(raw.nombre, LIMITS.nombre),
+    categoria: upperText(raw.categoria, LIMITS.categoria),
+    marca: upperText(raw.marca, LIMITS.marca),
+    modelo: upperText(raw.modelo, LIMITS.modelo),
+    serial: upperText(raw.serial, LIMITS.serial),
     fechaIngreso: sanitizeText(raw.fechaIngreso, 20),
     fechaAsignacion: sanitizeText(raw.fechaAsignacion || raw.fechaEgreso, 20),
     estado: ["Disponible","Asignado","En mantenimiento","Baja"].includes(raw.estado) ? raw.estado : "Disponible",
-    espacio: sanitizeText(raw.espacio, LIMITS.espacio),
-    responsable: sanitizeText(raw.responsable, LIMITS.responsable),
-    unidad: sanitizeText(raw.unidad, LIMITS.unidad),
+    espacio: upperText(raw.espacio, LIMITS.espacio),
+    responsable: upperText(raw.responsable, LIMITS.responsable),
+    unidad: upperText(raw.unidad, LIMITS.unidad),
     stockActual: Number.isSafeInteger(raw.stockActual) && raw.stockActual >= 0 ? raw.stockActual : 0,
     stockMinimo: Number.isSafeInteger(raw.stockMinimo) && raw.stockMinimo >= 0 ? raw.stockMinimo : 0,
     prioridadAlerta: raw.prioridadAlerta === "Baja" ? "Baja" : "Alta",
-    especificaciones: sanitizeText(raw.especificaciones, LIMITS.especificaciones),
+    especificaciones: upperText(raw.especificaciones, LIMITS.especificaciones),
     // Auditoría independiente: creación y última modificación.
     fechaCreacion: Number.isFinite(raw.fechaCreacion) ? raw.fechaCreacion : (Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now()),
     fechaUltimaModificacion: Number.isFinite(raw.fechaUltimaModificacion)
@@ -172,6 +172,11 @@ function buildItemFromForm(formKind, prefix="") {
   });
 }
 
+/* Todo texto escrito por el usuario se guarda y se muestra en MAYÚSCULAS */
+function upperText(value, max=160) {
+  return sanitizeText(value, max).toLocaleUpperCase("es-CO");
+}
+
 function normalizedKey(value) {
   return sanitizeText(value, 160).trim().toUpperCase();
 }
@@ -238,7 +243,7 @@ async function registrarMovimiento(item, tipoAccion, cantidad=0, espacioDestino=
     nombre:sanitizeText(item.nombre,LIMITS.nombre),
     tipoAccion:sanitizeText(tipoAccion,40),
     cantidad:qty===null?0:Math.max(0,qty),
-    espacioDestino:sanitizeText(espacioDestino,LIMITS.espacio),
+    espacioDestino:upperText(espacioDestino,LIMITS.espacio),
     usuario:currentUserName()
   };
   const movementRef=push(movimientosRef);
@@ -462,7 +467,7 @@ async function submitMovement(event){
   if(!pendingMovement) return;
 
   const quantity=safeInt($("movementQuantity").value);
-  const destination=sanitizeText($("movementDestination").value,LIMITS.espacio);
+  const destination=upperText($("movementDestination").value,LIMITS.espacio);
   const {id,delta}=pendingMovement;
   const item=inventario.find(entry=>entry.idFirebase===id);
 
@@ -873,6 +878,8 @@ function openRevertModal(m){
   $("revertItemInfo").textContent=`Salida del ${fmtDateTime(m.fechaHora)} · ${m.cantidad} unidad${m.cantidad===1?"":"es"} hacia ${m.espacioDestino||"—"}${m.cantidadRevertida?` · ya revertidas: ${m.cantidadRevertida}`:""}`;
   $("revertQuantity").value=String(remaining); $("revertQuantity").max=String(remaining);
   $("revertReason").value="";
+  const item=inventario.find(i=>i.tipo==="Consumible" && normalizedKey(i.codigo)===normalizedKey(m.codigo));
+  $("revertDestination").value=item?.espacio||"";
   $("revertModal").hidden=false; $("revertModal").setAttribute("aria-hidden","false");
   setTimeout(()=>$("revertQuantity").focus(),50);
 }
@@ -882,7 +889,9 @@ async function submitRevert(event){
   event.preventDefault();
   if(!pendingRevert || !allowed("movimientos")) return;
   const qty=safeInt($("revertQuantity").value);
-  const motivo=sanitizeText($("revertReason").value,200);
+  const motivo=upperText($("revertReason").value,200);
+  const returnPlace=upperText($("revertDestination").value,LIMITS.espacio);
+  if(!returnPlace){showToast("Indique el lugar al que retorna el material.",true);return;}
   if(qty===null || qty<1){showToast("La cantidad debe ser un número entero mayor que 0.",true);return;}
   const {key,codigo}=pendingRevert;
   const item=inventario.find(i=>i.tipo==="Consumible" && normalizedKey(i.codigo)===normalizedKey(codigo));
@@ -911,7 +920,7 @@ async function submitRevert(event){
     const finalStock=safeInt(stock.snapshot.val()?.stockActual);
     // 3) Registrar el movimiento de reversión en el historial
     const movement={fechaHora:Date.now(),tipo:"Consumible",codigo:sanitizeText(item.codigo,LIMITS.codigo),serial:sanitizeText(item.serial,LIMITS.serial),nombre:sanitizeText(item.nombre,LIMITS.nombre),
-      tipoAccion:"Reversión de salida",cantidad:qty,espacioDestino:sanitizeText(original?.espacioDestino,LIMITS.espacio),usuario:currentUserName(),refSalida:key,motivo};
+      tipoAccion:"Reversión de salida",cantidad:qty,espacioDestino:returnPlace,salidaHacia:upperText(original?.espacioDestino,LIMITS.espacio),usuario:currentUserName(),refSalida:key,motivo};
     const movementRef=push(movimientosRef);
     await set(movementRef,movement);
     withTimeout(setDoc(doc(firestore,"movimientos",movementRef.key),{...movement,idEvento:movementRef.key})).catch(()=>{});
@@ -1380,7 +1389,7 @@ function closeTransferModal(){
 async function submitTransfer(event){
   event.preventDefault();
   if(!transferItem || !allowed("traslado")) return;
-  const destination=sanitizeText($("transferDestination").value,LIMITS.espacio);
+  const destination=upperText($("transferDestination").value,LIMITS.espacio);
   if(!destination){showToast("Indique el nuevo espacio o ubicación.",true);return;}
   const id=transferItem.idFirebase;
   try{
@@ -1425,7 +1434,7 @@ async function loadLifecycleEvents(item){
 
 async function saveLifecycleNote(){
   if(!lifecycleItem || !allowed("hojaVida")) return;
-  const note=sanitizeText($("lifecycleNote").value,LIMITS.especificaciones);
+  const note=upperText($("lifecycleNote").value,LIMITS.especificaciones);
   if(!note){showToast("Escriba una nota de mantenimiento o intervención.",true);return;}
   try { await addLifecycleEvent(lifecycleItem,"Nota de mantenimiento",note); $("lifecycleNote").value=""; await loadLifecycleEvents(lifecycleItem); showToast("Nota registrada en la hoja de vida."); }
   catch(error){showToast("No se pudo registrar la nota.",true);}
@@ -1892,7 +1901,7 @@ async function importBulkFile(file){
 }
 
 function exportJson(){const data={inventario,movimientos,exportadoEn:Date.now()};const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});saveAs(blob,"backup_inventario.json")}
-async function importJson(file){if(!file||!allowed("importar"))return;try{const data=JSON.parse(await file.text());if(!Array.isArray(data.inventario))throw new Error();if(!confirm("Esto agregará los registros del respaldo a Firebase. ¿Continuar?"))return;for(const raw of data.inventario){const item=normalizeItem(raw);const now=Date.now();const created=Number(item.fechaCreacion)||Number(item.createdAt)||now;const modified=Number(item.fechaUltimaModificacion)||0;item.fechaCreacion=created;item.fechaUltimaModificacion=modified>created?modified:0;item.createdAt=created;item.updatedAt=item.fechaUltimaModificacion||created;delete item.idFirebase;await set(push(inventarioRef),item)}if(Array.isArray(data.movimientos)){for(const m of data.movimientos)await set(push(movimientosRef),{fechaHora:Number(m.fechaHora)||Date.now(),tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:sanitizeText(m.espacioDestino,120)})}showToast("Copia importada correctamente.");}catch{showToast("Archivo JSON inválido.",true)}}
+async function importJson(file){if(!file||!allowed("importar"))return;try{const data=JSON.parse(await file.text());if(!Array.isArray(data.inventario))throw new Error();if(!confirm("Esto agregará los registros del respaldo a Firebase. ¿Continuar?"))return;for(const raw of data.inventario){const item=normalizeItem(raw);const now=Date.now();const created=Number(item.fechaCreacion)||Number(item.createdAt)||now;const modified=Number(item.fechaUltimaModificacion)||0;item.fechaCreacion=created;item.fechaUltimaModificacion=modified>created?modified:0;item.createdAt=created;item.updatedAt=item.fechaUltimaModificacion||created;delete item.idFirebase;await set(push(inventarioRef),item)}if(Array.isArray(data.movimientos)){for(const m of data.movimientos)await set(push(movimientosRef),{fechaHora:Number(m.fechaHora)||Date.now(),tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:upperText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:Number.isInteger(m.cantidad)?m.cantidad:0,espacioDestino:upperText(m.espacioDestino,120)})}showToast("Copia importada correctamente.");}catch{showToast("Archivo JSON inválido.",true)}}
 function activateTab(id){document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===id));document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x.dataset.tab===id))}
 
 $("globalSearch").addEventListener("input",()=>{
@@ -1985,7 +1994,7 @@ startTrashListener();
 onValue(inventarioRef,snapshot=>{const data=snapshot.val()||{};renderizarInventario(Object.entries(data).map(([id,v])=>({...(v||{}),idFirebase:id})));},err=>{setSync("Error de conexión","error");showToast("Firebase rechazó la lectura. Revise las reglas.",true)});
 onValue(movimientosRef,snapshot=>{
   const data=snapshot.val()||{};
-  const rtdbMovements=Object.entries(data).map(([key,m])=>({_key:key,cantidadRevertida:safeInt(m?.cantidadRevertida)??0,refSalida:sanitizeText(m?.refSalida,80),motivo:sanitizeText(m?.motivo,200),idEvento:sanitizeText((m&&m.idEvento)||key,80),fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:safeInt(m.cantidad)??0,espacioDestino:sanitizeText(m.espacioDestino,120),usuario:sanitizeText(m.usuario,60)}));
+  const rtdbMovements=Object.entries(data).map(([key,m])=>({_key:key,cantidadRevertida:safeInt(m?.cantidadRevertida)??0,refSalida:sanitizeText(m?.refSalida,80),motivo:upperText(m?.motivo,200),idEvento:sanitizeText((m&&m.idEvento)||key,80),fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:upperText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:safeInt(m.cantidad)??0,espacioDestino:upperText(m.espacioDestino,120),usuario:sanitizeText(m.usuario,60)}));
   const firestoreMovements=movimientos.filter(m=>m.__firestore===true);
   movimientos=[...rtdbMovements,...firestoreMovements].filter((m,index,arr)=>!m.idEvento || arr.findIndex(x=>x.idEvento===m.idEvento)===index);
   renderMovements();renderInventoryTable();renderGeneralInventoryTable();renderAnalytics();
@@ -1993,7 +2002,7 @@ onValue(movimientosRef,snapshot=>{
 
 try {
   onSnapshot(collection(firestore,"movimientos"),snapshot=>{
-    const remote=snapshot.docs.map(d=>{const m=d.data()||{}; const rawTs=m.fechaHora; const ts=typeof rawTs==="number"?rawTs:(rawTs?.toMillis?rawTs.toMillis():Date.now()); return {__firestore:true,idEvento:sanitizeText(m.idEvento||d.id,80),fechaHora:ts,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:sanitizeText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:safeInt(m.cantidad)??0,espacioDestino:sanitizeText(m.espacioDestino,120),usuario:sanitizeText(m.usuario,60)};});
+    const remote=snapshot.docs.map(d=>{const m=d.data()||{}; const rawTs=m.fechaHora; const ts=typeof rawTs==="number"?rawTs:(rawTs?.toMillis?rawTs.toMillis():Date.now()); return {__firestore:true,idEvento:sanitizeText(m.idEvento||d.id,80),fechaHora:ts,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:upperText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:safeInt(m.cantidad)??0,espacioDestino:upperText(m.espacioDestino,120),usuario:sanitizeText(m.usuario,60)};});
     const rtdb=movimientos.filter(m=>!m.__firestore);
     movimientos=[...rtdb,...remote].filter((m,index,arr)=>!m.idEvento || arr.findIndex(x=>x.idEvento===m.idEvento)===index);
     renderMovements();renderInventoryTable();renderGeneralInventoryTable();renderAnalytics();

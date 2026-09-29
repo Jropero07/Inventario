@@ -219,7 +219,7 @@ async function submitLogin(e) {
 async function submitSetup(e) {
   e.preventDefault();
   const usuario = normUser($("setupUser").value);
-  const nombre = clean($("setupName").value);
+  const nombre = clean($("setupName").value).toLocaleUpperCase("es-CO");
   const pass = $("setupPassword").value, confirm = $("setupPassword2").value;
   if (!usuario || !nombre) { toast("Complete usuario y nombre.", true); return; }
   const err = passwordError(pass, confirm); if (err) { toast(err, true); return; }
@@ -242,7 +242,7 @@ async function submitForgot(e) {
   const usuario = normUser($("forgotUser").value);
   if (!usuario) { toast("Ingrese su usuario.", true); return; }
   try {
-    await set(push(ref(db, "solicitudesClave")), { usuario, motivo: clean($("forgotReason").value, 200), fecha: Date.now() });
+    await set(push(ref(db, "solicitudesClave")), { usuario, motivo: clean($("forgotReason").value, 200).toLocaleUpperCase("es-CO"), fecha: Date.now() });
     $("forgotUser").value = ""; $("forgotReason").value = "";
     toast("Solicitud enviada. Un Administrador le asignará una clave temporal.");
     showScreen("loginCard");
@@ -371,7 +371,7 @@ function resetPasswordFor(id) {
 async function submitUserForm(e) {
   e.preventDefault();
   const usuario = normUser($("userUsername").value);
-  const nombre = clean($("userFullName").value);
+  const nombre = clean($("userFullName").value).toLocaleUpperCase("es-CO");
   const rol = ROLES.includes($("userRole").value) ? $("userRole").value : "Solo lector";
   const activo = $("userActive").checked;
   const claveTemporal = $("userTemporal").checked;
