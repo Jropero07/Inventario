@@ -603,50 +603,12 @@ function renderTableRow(item) {
   } else stockTd.textContent="—";
   tr.appendChild(stockTd);
   const act=document.createElement("td"); act.className="actions";
-  act.append(button("fa-eye","Ver","view",()=>openViewModal(item),"Ver toda la información"));
-  if(can("editar")) act.append(button("fa-pen-to-square","Editar","edit",()=>editItem(item)));
-  const more=secondaryActions(item);
-  if(more.length) act.append(button("fa-ellipsis-vertical","Más","more",e=>openActionMenu(e.currentTarget,more),"Más opciones"));
+  act.append(button("fa-eye","Ver","view",()=>openViewModal(item),"Ver información, editar, QR, copiar y hoja de vida"));
+  if(item.tipo==="Activo" && can("traslado")) act.append(button("fa-location-arrow","Traslado","transfer",()=>openTransferModal(item),"Traslado Express"));
+  if(can("eliminar")) act.append(button("fa-trash","Eliminar","delete",()=>requestDeleteItem(item)));
   tr.appendChild(act);
   return tr;
 }
-
-/* ---------- Acciones secundarias agrupadas en menú "Más" ---------- */
-function secondaryActions(item){
-  const list=[];
-  if(can("traslado")) list.push({icon:"fa-location-arrow",text:"Traslado",run:()=>openTransferModal(item)});
-  if(can("qr")) list.push({icon:"fa-qrcode",text:"Código QR",run:()=>openQrModal(item)});
-  if(item.tipo==="Activo" && can("hojaVida")) list.push({icon:"fa-file-medical",text:"Hoja de vida",run:()=>openLifecycleModal(item)});
-  if(can("clonar")) list.push({icon:"fa-copy",text:"Copiar / Duplicar",run:()=>duplicateItem(item)});
-  if(can("eliminar")) list.push({icon:"fa-trash",text:"Eliminar",danger:true,run:()=>requestDeleteItem(item)});
-  return list;
-}
-function closeActionMenu(){ const m=$("actionMenu"); if(m){ m.hidden=true; m.replaceChildren(); } }
-function openActionMenu(anchor,actions){
-  let menu=$("actionMenu");
-  if(!menu){ menu=document.createElement("div"); menu.id="actionMenu"; menu.className="action-menu"; menu.setAttribute("role","menu"); menu.hidden=true; document.body.appendChild(menu); }
-  anchor.dataset.menuId=anchor.dataset.menuId||String(Math.random());
-  const wasOpenFor=menu.dataset.anchor===anchor.dataset.menuId && !menu.hidden;
-  closeActionMenu(); if(wasOpenFor){ menu.dataset.anchor=""; return; }
-  menu.dataset.anchor=anchor.dataset.menuId;
-  actions.forEach(a=>{
-    const b=document.createElement("button"); b.type="button"; b.setAttribute("role","menuitem"); if(a.danger) b.className="danger";
-    const i=document.createElement("i"); i.className=`fa-solid ${a.icon}`; i.setAttribute("aria-hidden","true");
-    b.append(i,makeEl("span",a.text));
-    b.addEventListener("click",()=>{ closeActionMenu(); a.run(); });
-    menu.appendChild(b);
-  });
-  menu.hidden=false; actionMenuOpenedAt=Date.now();
-  const r=anchor.getBoundingClientRect(), mw=menu.offsetWidth, mh=menu.offsetHeight;
-  let left=Math.min(r.right-mw, window.innerWidth-mw-8); left=Math.max(8,left);
-  let top=r.bottom+4; if(top+mh>window.innerHeight-8) top=Math.max(8,r.top-mh-4);
-  menu.style.left=`${left}px`; menu.style.top=`${top}px`;
-}
-document.addEventListener("click",e=>{ const m=$("actionMenu"); if(m && !m.hidden && !m.contains(e.target) && !e.target.closest(".mini-btn.more")) closeActionMenu(); });
-let actionMenuOpenedAt=0;
-window.addEventListener("scroll",()=>{ if(Date.now()-actionMenuOpenedAt>400) closeActionMenu(); },true);
-window.addEventListener("resize",closeActionMenu);
-document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeActionMenu(); });
 
 /* ---------- Ver toda la información del artículo ---------- */
 let viewItemId="";
@@ -685,7 +647,10 @@ function openViewModal(item){
   const add=(icon,text,cls,fn)=>{const b=button(icon,text,cls,()=>{closeViewModal();fn();});b.classList.add("view-action");actions.appendChild(b);};
   if(current.tipo==="Consumible" && can("movimientos")){ add("fa-plus","Entrada","plus",()=>openMovementModal(current.idFirebase,1)); add("fa-minus","Salida","minus",()=>openMovementModal(current.idFirebase,-1)); }
   if(can("editar")) add("fa-pen-to-square","Editar","edit",()=>editItem(current));
-  secondaryActions(current).forEach(a=>add(a.icon,a.text,a.danger?"delete":"",a.run));
+  if(can("qr")) add("fa-qrcode","Código QR","qr",()=>openQrModal(current));
+  if(can("clonar")) add("fa-copy","Copiar / Duplicar","copy",()=>duplicateItem(current));
+  if(current.tipo==="Activo" && can("hojaVida")) add("fa-file-medical","Hoja de vida","lifecycle",()=>openLifecycleModal(current));
+  if(current.tipo==="Consumible" && can("traslado")) add("fa-warehouse","Cambiar ubicación de almacenamiento","transfer",()=>openTransferModal(current));
   $("viewModal").hidden=false; $("viewModal").setAttribute("aria-hidden","false");
 }
 function closeViewModal(){ viewItemId=""; $("viewModal").hidden=true; $("viewModal").setAttribute("aria-hidden","true"); }
