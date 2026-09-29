@@ -25,7 +25,7 @@ const MIN_PASSWORD = 4;
 const PBKDF2_ITERATIONS = 100000;
 const MAX_INTENTOS = 5;
 const BLOQUEO_TEMPORAL_MS = 15 * 60 * 1000;
-const INACTIVIDAD_MS = 5 * 60 * 1000;
+const INACTIVIDAD_MS = 10 * 60 * 1000;
 const IDLE_FLAG = "invti_idle_logout";
 
 let db = null;
@@ -84,7 +84,7 @@ function startIdleWatch() {
   idleTimer = setInterval(async () => {
     if (!currentUser || Date.now() - lastActivity < INACTIVIDAD_MS) return;
     clearInterval(idleTimer); idleTimer = null;
-    await Promise.race([logAccess(currentUser.usuario, "Cierre por inactividad", "5 minutos sin actividad"), new Promise(res => setTimeout(res, 1500))]);
+    await Promise.race([logAccess(currentUser.usuario, "Cierre por inactividad", "10 minutos sin actividad"), new Promise(res => setTimeout(res, 1500))]);
     try { sessionStorage.setItem(IDLE_FLAG, "idle"); } catch {}
     clearSession();
     location.reload();
@@ -515,8 +515,11 @@ export async function initAuth(database, onReady) {
     showScreen("loginCard");
     let reason = "";
     try { reason = sessionStorage.getItem(IDLE_FLAG) || ""; sessionStorage.removeItem(IDLE_FLAG); } catch {}
-    if (reason === "idle") showLoginNotice("Su sesión expiró por 5 minutos de inactividad. Por favor, inicie sesión nuevamente para continuar.", "warn");
-    else if (reason === "logout") showLoginNotice("Sesión cerrada correctamente. Inicie sesión nuevamente para continuar.", "info");
+    if (reason === "idle") showLoginNotice("Su sesión expiró por 10 minutos de inactividad. Por favor, inicie sesión nuevamente para continuar.", "warn");
+    else if (reason === "logout") {
+      showLoginNotice("Sesión cerrada correctamente. Inicie sesión nuevamente para continuar.", "info");
+      setTimeout(() => { $("loginNotice").hidden = true; }, 12000);
+    }
   } catch (error) {
     console.error("No se pudo leer usuarios:", error);
     showScreen("loginCard");

@@ -1910,7 +1910,19 @@ $("globalSearch").addEventListener("input",()=>{
   renderGeneralInventoryTable();
 });
 
-document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>activateTab(b.dataset.tab)));
+document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{activateTab(b.dataset.tab);if(window.innerWidth<=720){window.scrollTo({top:0,behavior:"smooth"});b.scrollIntoView({inline:"center",block:"nearest",behavior:"smooth"});}}));
+
+/* Vista móvil: cada fila de tabla se muestra como tarjeta con la etiqueta de su columna */
+function labelTableCells(table){
+  const heads=[...table.querySelectorAll("thead th")].map(th=>th.textContent.trim());
+  table.querySelectorAll("tbody tr").forEach(tr=>[...tr.children].forEach((td,i)=>{ if(heads[i] && td.dataset.label!==heads[i]) td.dataset.label=heads[i]; }));
+}
+["inventoryTableBody","generalInventoryTableBody","movementTableBody","trashTableBody","usersTableBody","accessLogBody"].forEach(id=>{
+  const body=$(id); if(!body) return;
+  const table=body.closest("table"); table.classList.add("cards-mobile");
+  labelTableCells(table);
+  new MutationObserver(()=>labelTableCells(table)).observe(body,{childList:true});
+});
 ["generalSearch","filterType","filterStatus","filterCategory","filterSpace"].forEach(id=>$(id).addEventListener("input",renderGeneralInventoryTable));
 ["movementSearchName","movementSearchSku","movementSearchSerial","movementDateFrom","movementDateTo","movementType","movementAction","movementSearchDestination","movementSearchUser"].forEach(id=>$(id).addEventListener("input",renderMovements));
 $("clearFiltersBtn").addEventListener("click",()=>{$("generalSearch").value="";$("filterType").value="";$("filterStatus").value="";$("filterCategory").value="";$("filterSpace").value="";renderGeneralInventoryTable()});
