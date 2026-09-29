@@ -344,6 +344,15 @@
     </div>
   </div>
 
+  <div id="viewModal" class="modal-backdrop" hidden aria-hidden="true">
+    <div class="modal view-modal" role="dialog" aria-modal="true" aria-labelledby="viewTitle">
+      <div class="modal-head"><div><h3 id="viewTitle">Artículo</h3><span id="viewSubtitle" class="view-subtitle"></span></div><button id="closeViewBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
+      <div id="viewDetails" class="view-details"></div>
+      <div class="view-history"><h4>Últimos movimientos</h4><div id="viewMovements"></div></div>
+      <div id="viewActions" class="modal-actions view-actions"></div>
+    </div>
+  </div>
+
   <div id="revertModal" class="modal-backdrop" hidden aria-hidden="true">
     <div class="modal transfer-modal" role="dialog" aria-modal="true" aria-labelledby="revertTitle">
       <div class="modal-head"><h3 id="revertTitle">Revertir salida</h3><button id="closeRevertBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>

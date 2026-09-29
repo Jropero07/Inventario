@@ -1891,3 +1891,54 @@ td.actions:empty { display: table-cell; }
   .search-with-scan .btn { flex: 0 0 auto; width: auto; }
   table.cards-mobile td:empty { display: none; }
 }
+
+/* Acciones compactas: Ver, Editar y menú "Más" */
+.mini-btn.view { border-color: var(--blue); color: var(--blue); font-weight: 700; }
+.action-menu {
+  position: fixed;
+  z-index: 2000;
+  min-width: 190px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.18);
+  padding: 6px;
+  display: grid;
+}
+.action-menu[hidden] { display: none; }
+.action-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  padding: 10px 12px;
+  border-radius: 7px;
+  text-align: left;
+  color: var(--text);
+  font: inherit;
+}
+.action-menu button:hover { background: #f1f5f9; }
+.action-menu button i { width: 16px; text-align: center; color: var(--muted); }
+.action-menu button.danger, .action-menu button.danger i { color: var(--danger); }
+
+/* Ficha "Ver" */
+.view-modal { width: min(760px, 100%); }
+.view-subtitle { color: var(--muted); font-size: 13px; }
+.view-details { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 16px 18px; }
+.view-field { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: #f8fafc; min-width: 0; }
+.view-field.wide { grid-column: 1 / -1; }
+.view-field span { display: block; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; }
+.view-field strong { display: block; margin-top: 3px; overflow-wrap: anywhere; font-weight: 600; }
+.view-history { padding: 0 18px 12px; }
+.view-history h4 { margin: 0 0 8px; }
+.view-movement { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 13px; }
+.view-movement span { color: var(--muted); text-align: right; }
+.view-actions { flex-wrap: wrap; justify-content: flex-start; }
+@media (max-width: 720px) {
+  .view-details { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 12px; }
+  .view-movement { flex-direction: column; gap: 2px; }
+  .view-movement span { text-align: left; }
+  .view-actions .mini-btn { flex: 1 1 calc(50% - 10px); justify-content: center; min-height: 38px; }
+  table.cards-mobile td.actions .mini-btn { flex: 1 1 calc(33% - 6px); }
+}
