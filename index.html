@@ -321,14 +321,13 @@
         <label id="movementSplitWrap" class="check-label split-toggle"><input id="movementSplitToggle" type="checkbox"><span>Repartir en varios destinos</span></label>
         <div id="movementSingleFields">
           <div class="field"><label for="movementQuantity">Cantidad</label><input id="movementQuantity" type="number" min="1" step="1" inputmode="numeric" value="1" required></div>
-          <div class="field"><label for="movementDestination">Espacio / Lugar de destino</label><input id="movementDestination" maxlength="120" required placeholder="Ej. Bodega TIC, Oficina 203" list="spaceOptions"></div>
+          <div class="field"><label for="movementDestination">Espacio / Lugar de destino</label><input id="movementDestination" maxlength="120" required placeholder="Ej. Bodega TIC, Oficina 203" autocomplete="off"></div>
         </div>
         <div id="movementSplitFields" class="split-fields" hidden>
           <div class="split-head"><span>Destino</span><span>Cant.</span><span></span></div>
           <div id="movementSplitRows"></div>
           <div class="split-foot"><button id="movementSplitAddBtn" type="button" class="btn secondary"><i class="fa-solid fa-plus" aria-hidden="true"></i><span>Agregar destino</span></button><strong id="movementSplitTotal">Total: 0</strong></div>
         </div>
-        <datalist id="spaceOptions"></datalist>
         <div class="modal-actions">
           <button id="cancelMovementBtn" type="button" class="btn secondary"><i class="fa-solid fa-xmark" aria-hidden="true"></i><span>Cancelar</span></button>
           <button id="saveMovementBtn" type="submit" class="btn primary"><i class="fa-solid fa-right-left" aria-hidden="true"></i><span>Registrar movimiento</span></button>

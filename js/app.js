@@ -412,8 +412,6 @@ function openMovementModal(idFirebase, delta) {
   $("movementSplitToggle").checked=false;
   $("movementSplitRows").replaceChildren();
   toggleMovementSplit();
-  const spaces=new Set([...inventario.map(i=>i.espacio),...movimientos.map(m=>m.espacioDestino)].filter(Boolean));
-  $("spaceOptions").replaceChildren(...[...spaces].sort((a,b)=>a.localeCompare(b,"es")).map(v=>{const o=document.createElement("option");o.value=v;return o;}));
   $("movementModal").hidden=false;
   $("movementModal").setAttribute("aria-hidden","false");
   setTimeout(()=>$("movementQuantity").focus(),50);
@@ -422,7 +420,7 @@ function openMovementModal(idFirebase, delta) {
 /* ---------- Salida repartida en varios destinos ---------- */
 function addSplitRow(dest="",qty=1){
   const row=document.createElement("div"); row.className="split-row";
-  const d=document.createElement("input"); d.className="split-dest"; d.maxLength=120; d.placeholder="Ej. SALA 3"; d.setAttribute("list","spaceOptions"); d.value=dest; d.setAttribute("aria-label","Destino");
+  const d=document.createElement("input"); d.className="split-dest"; d.maxLength=120; d.placeholder="Ej. SALA 3"; d.autocomplete="off"; d.value=dest; d.setAttribute("aria-label","Destino");
   const q=document.createElement("input"); q.className="split-qty"; q.type="number"; q.min="1"; q.step="1"; q.inputMode="numeric"; q.value=String(qty); q.setAttribute("aria-label","Cantidad");
   const del=document.createElement("button"); del.type="button"; del.className="icon-btn split-del"; del.title="Quitar destino"; del.setAttribute("aria-label","Quitar destino"); del.innerHTML='<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
   del.addEventListener("click",()=>{ if($("movementSplitRows").children.length>2){ row.remove(); updateSplitTotal(); } else showToast("Se necesitan al menos 2 destinos para repartir.",true); });
