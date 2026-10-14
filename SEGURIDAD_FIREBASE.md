@@ -4,6 +4,9 @@ Firebase avisó que las reglas permitían que **cualquier persona con la direcci
 Desde esta versión la aplicación inicia una sesión técnica anónima de Firebase antes de cargar, y las nuevas reglas
 rechazan todo acceso que no venga de una sesión de Firebase.
 
+> **v40:** las reglas incluyen la nueva ruta `hojaVida` (Hoja de vida en Realtime Database).
+> Si ya publicaste las reglas antes, vuelve a pegar `database.rules.json` y publica.
+
 ## Pasos (en este orden)
 
 1. **Publicar esta versión** en GitHub Pages (reemplazar `index.html`, `css/`, `js/` y `assets/`).

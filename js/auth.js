@@ -76,19 +76,31 @@ function logAccess(usuario, evento, detalle = "") {
 /* ---------- Cierre por inactividad ---------- */
 let idleTimer = null;
 let lastActivity = Date.now();
-function markActivity() { lastActivity = Date.now(); }
+const AVISO_INACTIVIDAD_MS = 60 * 1000;
+function markActivity() { if ($("idleWarning") && !$("idleWarning").hidden) return; lastActivity = Date.now(); }
+function hideIdleWarning() { const w = $("idleWarning"); if (w) { w.hidden = true; w.setAttribute("aria-hidden", "true"); } }
 function startIdleWatch() {
   if (idleTimer) return;
   lastActivity = Date.now();
   ["mousemove", "mousedown", "keydown", "scroll", "touchstart", "wheel"].forEach(ev => document.addEventListener(ev, markActivity, { passive: true, capture: true }));
+  $("idleStayBtn").addEventListener("click", () => { hideIdleWarning(); lastActivity = Date.now(); });
+  $("idleLogoutBtn").addEventListener("click", () => { hideIdleWarning(); logout(); });
   idleTimer = setInterval(async () => {
-    if (!currentUser || Date.now() - lastActivity < INACTIVIDAD_MS) return;
-    clearInterval(idleTimer); idleTimer = null;
+    if (!currentUser) return;
+    const idle = Date.now() - lastActivity;
+    if (idle >= INACTIVIDAD_MS - AVISO_INACTIVIDAD_MS && idle < INACTIVIDAD_MS) {
+      const secs = Math.ceil((INACTIVIDAD_MS - idle) / 1000);
+      $("idleCountdown").textContent = String(secs);
+      if ($("idleWarning").hidden) { $("idleWarning").hidden = false; $("idleWarning").setAttribute("aria-hidden", "false"); $("idleStayBtn").focus(); }
+      return;
+    }
+    if (idle < INACTIVIDAD_MS) { hideIdleWarning(); return; }
+    clearInterval(idleTimer); idleTimer = null; hideIdleWarning();
     await Promise.race([logAccess(currentUser.usuario, "Cierre por inactividad", "10 minutos sin actividad"), new Promise(res => setTimeout(res, 1500))]);
     try { sessionStorage.setItem(IDLE_FLAG, "idle"); } catch {}
     clearSession();
     location.reload();
-  }, 10000);
+  }, 1000);
 }
 
 /* ---------- Permisos ---------- */

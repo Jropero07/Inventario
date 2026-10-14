@@ -1939,3 +1939,32 @@ td.actions:empty { display: table-cell; }
 .sidebar .brand-mark.brand-logo { width: 46px; height: 46px; }
 .auth-brand .brand-mark.brand-logo { width: 56px; height: 56px; background: #ffffff; box-shadow: 0 0 0 1px var(--line); }
 @media (max-width: 720px) { .sidebar .brand-mark.brand-logo { width: 38px; height: 38px; } }
+
+/* Mantenimiento preventivo */
+.maint-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.maint-chip { border: 1px solid var(--line); background: #ffffff; border-radius: 999px; padding: 7px 14px; font-weight: 700; color: var(--text); }
+.maint-chip:hover { border-color: var(--blue); }
+.maint-chip.active { background: var(--blue); border-color: var(--blue); color: #ffffff; }
+#maintNoteField[hidden], #maintClearBtn[hidden], .maint-alerts-wrap[hidden] { display: none; }
+#maintNote { text-transform: uppercase; }
+.maint-alerts-wrap { border: 1px solid var(--line); background: #ffffff; border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+.maint-alerts-wrap h3 { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 16px; }
+.muted-text { color: var(--muted); margin: 4px 0 10px; font-size: 13px; }
+.maint-alerts { display: grid; gap: 8px; }
+.maint-alert { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 10px; border: 1px solid #ecd58c; background: #fffbea; }
+.maint-alert.soon { border-color: #f5c27a; background: #fff4e5; }
+.maint-alert.overdue { border-color: #f2b8b5; background: #fdecec; }
+.maint-alert strong, .maint-alert span { display: block; }
+.maint-alert > div span { color: var(--muted); font-size: 12px; }
+.maint-when { font-weight: 700; font-size: 13px; }
+.maint-alert.overdue .maint-when { color: var(--danger); }
+@media (max-width: 720px) { .maint-alert { grid-template-columns: 1fr; } }
+
+/* Aviso de cierre por inactividad */
+.idle-backdrop { z-index: 3000; }
+.idle-modal { width: min(420px, 100%); }
+.idle-body { padding: 22px 22px 8px; text-align: center; }
+.idle-body i { font-size: 34px; color: var(--warn); }
+.idle-body h3 { margin: 8px 0 6px; }
+.idle-body p { margin: 0; color: var(--muted); }
+.idle-body strong { color: var(--text); }

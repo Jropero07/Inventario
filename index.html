@@ -239,6 +239,11 @@
           <button type="button" class="alert-filter" data-alert-filter="critical">Solo Críticas</button>
           <button type="button" class="alert-filter" data-alert-filter="preventive">Solo Preventivas</button>
         </div>
+        <div id="maintenanceAlertsWrap" class="maint-alerts-wrap" hidden>
+          <h3><i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i> Mantenimientos preventivos <span id="maintenanceCount" class="badge alert">0</span></h3>
+          <p class="muted-text">Activos con mantenimiento vencido o programado en los próximos 15 días.</p>
+          <div id="maintenanceAlerts" class="maint-alerts"></div>
+        </div>
         <div id="criticalList" class="critical-grid"></div>
       </section>
 
@@ -359,6 +364,33 @@
       <div id="viewDetails" class="view-details"></div>
       <div class="view-history"><h4>Últimos movimientos</h4><div id="viewMovements"></div></div>
       <div id="viewActions" class="modal-actions view-actions"></div>
+    </div>
+  </div>
+
+  <div id="maintenanceModal" class="modal-backdrop" hidden aria-hidden="true">
+    <div class="modal transfer-modal" role="dialog" aria-modal="true" aria-labelledby="maintTitle">
+      <div class="modal-head"><h3 id="maintTitle">Mantenimiento preventivo</h3><button id="closeMaintBtn" type="button" class="icon-btn" aria-label="Cerrar"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
+      <div class="movement-form">
+        <div class="movement-info"><strong id="maintItemName">Activo</strong><span id="maintCurrent"></span></div>
+        <div class="field"><label>Programar a partir de hoy</label>
+          <div class="maint-chips"><button type="button" class="maint-chip" data-months="1">1 mes</button><button type="button" class="maint-chip" data-months="3">3 meses</button><button type="button" class="maint-chip" data-months="6">6 meses</button><button type="button" class="maint-chip" data-months="12">1 año</button></div>
+        </div>
+        <div class="field"><label for="maintDate">Fecha del próximo mantenimiento</label><input id="maintDate" type="date"></div>
+        <label class="check-label"><input id="maintDone" type="checkbox"><span>Registrar en la hoja de vida que hoy se realizó un mantenimiento</span></label>
+        <div id="maintNoteField" class="field" hidden><label for="maintNote">Detalle del mantenimiento <span class="optional-label">(opcional)</span></label><input id="maintNote" maxlength="300" placeholder="Ej. Limpieza y ajuste de conectores"></div>
+        <div class="modal-actions"><button id="maintClearBtn" type="button" class="btn secondary" hidden><span>Quitar programación</span></button><button id="maintCancelBtn" type="button" class="btn secondary"><span>Cancelar</span></button><button id="maintSaveBtn" type="button" class="btn primary"><i class="fa-solid fa-calendar-check" aria-hidden="true"></i><span>Guardar</span></button></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="idleWarning" class="modal-backdrop idle-backdrop" hidden aria-hidden="true">
+    <div class="modal idle-modal" role="alertdialog" aria-modal="true" aria-labelledby="idleTitle">
+      <div class="idle-body">
+        <i class="fa-solid fa-clock" aria-hidden="true"></i>
+        <h3 id="idleTitle">¿Sigue ahí?</h3>
+        <p>Por inactividad, su sesión se cerrará en <strong><span id="idleCountdown">60</span> segundos</strong>.</p>
+      </div>
+      <div class="modal-actions"><button id="idleLogoutBtn" type="button" class="btn secondary"><span>Cerrar sesión</span></button><button id="idleStayBtn" type="button" class="btn primary"><span>Seguir conectado</span></button></div>
     </div>
   </div>
 

@@ -39,6 +39,16 @@
       }
     },
 
+    "hojaVida": {
+      ".read": "auth != null",
+      "$itemId": {
+        "$eventId": {
+          ".write": "auth != null && !data.exists()",
+          ".validate": "newData.hasChildren(['fechaHora', 'tipo'])"
+        }
+      }
+    },
+
     "accesos": {
       ".read": "auth != null",
       "$id": {

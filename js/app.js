@@ -1,5 +1,5 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js";
-import { getDatabase, ref, push, set, onValue, remove, update, runTransaction } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-database.js";
+import { getDatabase, ref, push, set, get, onValue, remove, update, runTransaction } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-database.js";
 import { getFirestore, collection, doc, setDoc, addDoc, getDocs, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-firestore.js";
 import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-auth.js";
 import { initAuth, can, getCurrentUser } from "./auth.js";
@@ -96,6 +96,7 @@ function normalizeItem(raw) {
     stockMinimo: Number.isSafeInteger(raw.stockMinimo) && raw.stockMinimo >= 0 ? raw.stockMinimo : 0,
     prioridadAlerta: raw.prioridadAlerta === "Baja" ? "Baja" : "Alta",
     especificaciones: upperText(raw.especificaciones, LIMITS.especificaciones),
+    proximoMantenimiento: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.proximoMantenimiento||"")) ? raw.proximoMantenimiento : "",
     // Auditoría independiente: creación y última modificación.
     fechaCreacion: Number.isFinite(raw.fechaCreacion) ? raw.fechaCreacion : (Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now()),
     fechaUltimaModificacion: Number.isFinite(raw.fechaUltimaModificacion)
@@ -278,7 +279,7 @@ async function syncFirestoreAsset(item,id) {
 async function addLifecycleEvent(item,eventType,details="") {
   if(item.tipo!=="Activo") return;
   try {
-    await withTimeout(addDoc(collection(firestore,"inventario",item.idFirebase,"hojaVida"),{fechaHora:serverTimestamp(),tipo:sanitizeText(eventType,80),detalle:sanitizeText(details,1000),ubicacion:item.espacio||"",responsable:item.responsable||"",estado:item.estado||"",usuario:currentUserName()}));
+    await set(push(ref(db,`hojaVida/${item.idFirebase}`)),{fechaHora:Date.now(),tipo:sanitizeText(eventType,80),detalle:sanitizeText(details,1000),ubicacion:item.espacio||"",responsable:item.responsable||"",estado:item.estado||"",usuario:currentUserName()});
   } catch(error) { console.warn("No se pudo registrar evento en Hoja de Vida.",error); }
 }
 
@@ -298,6 +299,8 @@ async function guardarItemFirebase(item, existingId="") {
     const before=inventario.find(x=>x.idFirebase===id);
     if(!before) throw new Error("No se encontró el registro original para editarlo. Vuelva a cargar la página e inténtelo de nuevo.");
 
+    // La fecha de mantenimiento solo se cambia desde "Mantenimiento"; el formulario de edición la conserva
+    if(!item.proximoMantenimiento) clean.proximoMantenimiento=before.proximoMantenimiento||"";
     const now=Date.now();
     const created=Number.isFinite(before.fechaCreacion) ? before.fechaCreacion : (Number.isFinite(before.createdAt) ? before.createdAt : now);
     const changed=hasRealItemChange(before,clean);
@@ -669,6 +672,7 @@ function openViewModal(item){
       ? [["Estado",current.estado],["Espacio / Ubicación",displayLocation(current)],["Responsable",current.responsable],["Fecha de asignación",fmtDate(current.fechaAsignacion)]]
       : [["Espacio / Ubicación",current.espacio],["Unidad",current.unidad],["Stock actual",String(current.stockActual)],["Stock mínimo",String(current.stockMinimo)],["Prioridad de alerta",current.prioridadAlerta]]),
     ["Fecha de ingreso",fmtDate(current.fechaIngreso)],
+    ...(current.tipo==="Activo" ? [["Próximo mantenimiento",maintenanceLabel(current)]] : []),
     ["Creado",creation?fmtDateTime(creation):""],["Última modificación",modification?fmtDateTime(modification):"Sin modificaciones"],
     ["Especificaciones",current.especificaciones,true]
   ];
@@ -693,6 +697,7 @@ function openViewModal(item){
   if(can("qr")) add("fa-qrcode","Código QR","qr",()=>openQrModal(current));
   if(can("clonar")) add("fa-copy","Copiar / Duplicar","copy",()=>duplicateItem(current));
   if(current.tipo==="Activo" && can("hojaVida")) add("fa-file-medical","Hoja de vida","lifecycle",()=>openLifecycleModal(current));
+  if(current.tipo==="Activo" && can("editar")) add("fa-screwdriver-wrench","Mantenimiento","edit",()=>openMaintenanceModal(current));
   if(current.tipo==="Consumible" && can("traslado")) add("fa-warehouse","Cambiar ubicación de almacenamiento","transfer",()=>openTransferModal(current));
   $("viewModal").hidden=false; $("viewModal").setAttribute("aria-hidden","false");
 }
@@ -752,7 +757,70 @@ function filteredAlerts() {
   return alerts;
 }
 
+/* ---------- Mantenimiento preventivo ---------- */
+const MAINT_WARNING_DAYS=15;
+function daysUntil(dateStr){
+  const m=String(dateStr||"").match(/^(\d{4})-(\d{2})-(\d{2})$/); if(!m) return null;
+  const target=new Date(Number(m[1]),Number(m[2])-1,Number(m[3])); const today=new Date(); today.setHours(0,0,0,0);
+  return Math.round((target-today)/86400000);
+}
+function maintenanceLabel(item){
+  const d=daysUntil(item.proximoMantenimiento); if(d===null) return "Sin programar";
+  const date=item.proximoMantenimiento.split("-").reverse().join("/");
+  if(d<0) return `${date} · VENCIDO hace ${-d} día${d===-1?"":"s"}`;
+  if(d===0) return `${date} · HOY`;
+  return `${date} · en ${d} día${d===1?"":"s"}`;
+}
+function addMonthsInput(months, base=new Date()){
+  const d=new Date(base.getFullYear(),base.getMonth(),base.getDate()); const day=d.getDate();
+  d.setMonth(d.getMonth()+months); if(d.getDate()!==day) d.setDate(0);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+let maintenanceItem=null;
+function openMaintenanceModal(item){
+  if(!allowed("editar")) return;
+  maintenanceItem=inventario.find(x=>x.idFirebase===item.idFirebase)||item;
+  $("maintItemName").textContent=maintenanceItem.nombre||"Activo";
+  $("maintCurrent").textContent=`Programado actualmente: ${maintenanceLabel(maintenanceItem)}`;
+  $("maintDate").value=maintenanceItem.proximoMantenimiento||"";
+  $("maintDone").checked=false; $("maintNote").value=""; $("maintNoteField").hidden=true;
+  $("maintClearBtn").hidden=!maintenanceItem.proximoMantenimiento;
+  document.querySelectorAll(".maint-chip").forEach(c=>c.classList.remove("active"));
+  $("maintenanceModal").hidden=false; $("maintenanceModal").setAttribute("aria-hidden","false");
+}
+function closeMaintenanceModal(){ maintenanceItem=null; $("maintenanceModal").hidden=true; $("maintenanceModal").setAttribute("aria-hidden","true"); }
+async function saveMaintenance(clear=false){
+  if(!maintenanceItem || !allowed("editar")) return;
+  const date=clear?"":$("maintDate").value;
+  if(!clear && !/^\d{4}-\d{2}-\d{2}$/.test(date)){showToast("Elija la fecha del próximo mantenimiento.",true);return;}
+  const item=maintenanceItem, now=Date.now();
+  try{
+    await update(ref(db,`inventario/${item.idFirebase}`),{proximoMantenimiento:date,fechaUltimaModificacion:now,updatedAt:now});
+    if($("maintDone").checked) await addLifecycleEvent(item,"Mantenimiento realizado",upperText($("maintNote").value,LIMITS.especificaciones)||"MANTENIMIENTO PREVENTIVO REALIZADO");
+    await addLifecycleEvent(item,clear?"Mantenimiento desprogramado":"Mantenimiento programado",clear?"":`Próximo mantenimiento: ${date.split("-").reverse().join("/")}`);
+    closeMaintenanceModal();
+    showToast(clear?"Mantenimiento desprogramado.":`Próximo mantenimiento: ${date.split("-").reverse().join("/")}.`);
+  }catch(error){ console.error(error); showToast("No se pudo guardar el mantenimiento.",true); }
+}
+function renderMaintenanceAlerts(){
+  const box=$("maintenanceAlerts"); if(!box) return;
+  const list=inventario.filter(i=>i.tipo==="Activo" && i.estado!=="Baja" && i.proximoMantenimiento)
+    .map(i=>({item:i,days:daysUntil(i.proximoMantenimiento)})).filter(x=>x.days!==null && x.days<=MAINT_WARNING_DAYS)
+    .sort((a,b)=>a.days-b.days);
+  box.replaceChildren();
+  $("maintenanceAlertsWrap").hidden=!list.length;
+  $("maintenanceCount").textContent=String(list.length);
+  list.forEach(({item,days})=>{
+    const row=document.createElement("div"); row.className=`maint-alert ${days<0?"overdue":days<=3?"soon":""}`;
+    const info=document.createElement("div"); info.append(makeEl("strong",item.nombre),makeEl("span",`${item.codigo} · ${item.espacio||"Sin ubicación"}`));
+    row.append(info,makeEl("span",maintenanceLabel(item),"maint-when"));
+    if(can("editar")) row.append(button("fa-screwdriver-wrench","Gestionar","edit",()=>openMaintenanceModal(item),"Programar o registrar mantenimiento"));
+    box.appendChild(row);
+  });
+}
+
 function renderCriticals() {
+  renderMaintenanceAlerts();
   const allAlerts=inventario.filter(i=>alertLevel(i));
   const alertIds=new Set(allAlerts.map(i=>i.idFirebase));
   [...selectedAlertIds].forEach(id=>{ if(!alertIds.has(id)) selectedAlertIds.delete(id); });
@@ -1509,11 +1577,11 @@ async function openLifecycleModal(item){
 async function loadLifecycleEvents(item){
   const list=$("lifecycleHistory"); list.replaceChildren();
   try {
-    const snap=await getDocs(collection(firestore,"inventario",item.idFirebase,"hojaVida"));
-    const events=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>{const at=a.fechaHora?.toMillis?a.fechaHora.toMillis():Number(a.fechaHora)||0;const bt=b.fechaHora?.toMillis?b.fechaHora.toMillis():Number(b.fechaHora)||0;return bt-at;});
+    const snap=await get(ref(db,`hojaVida/${item.idFirebase}`));
+    const events=Object.entries(snap.val()||{}).map(([id,e])=>({id,...(e||{})})).sort((a,b)=>(Number(b.fechaHora)||0)-(Number(a.fechaHora)||0));
     if(!events.length){list.appendChild(makeEl("p","No hay eventos registrados en la hoja de vida.","muted"));return;}
-    events.forEach(e=>{const row=document.createElement("div");row.className="lifecycle-event";const ts=e.fechaHora?.toMillis?e.fechaHora.toMillis():Number(e.fechaHora)||0;row.append(makeEl("strong",e.tipo||"Evento"),makeEl("span",ts?fmtDateTime(ts):"Fecha pendiente"),makeEl("p",e.detalle||""));list.appendChild(row);});
-  } catch(error){ list.appendChild(makeEl("p","La hoja de vida histórica requiere que Firestore esté habilitado y sus reglas permitan lectura.","muted")); console.warn(error); }
+    events.forEach(e=>{const row=document.createElement("div");row.className="lifecycle-event";const ts=Number(e.fechaHora)||0;row.append(makeEl("strong",e.tipo||"Evento"),makeEl("span",`${ts?fmtDateTime(ts):"Sin fecha"}${e.usuario?` · ${e.usuario}`:""}`),makeEl("p",e.detalle||""));list.appendChild(row);});
+  } catch(error){ list.appendChild(makeEl("p","No se pudo leer la hoja de vida. Revise que las reglas de Firebase incluyan la ruta hojaVida.","muted")); console.warn(error); }
 }
 
 async function saveLifecycleNote(){
@@ -2113,6 +2181,17 @@ signInAnonymously(getAuth(app))
     showToast("Active el inicio de sesión Anónimo en Firebase Authentication para proteger la base de datos.",true);
   })
   .finally(()=>initAuth(db,startRealtime));
+document.querySelectorAll(".maint-chip").forEach(chip=>chip.addEventListener("click",()=>{
+  $("maintDate").value=addMonthsInput(Number(chip.dataset.months));
+  document.querySelectorAll(".maint-chip").forEach(c=>c.classList.toggle("active",c===chip));
+}));
+$("maintDate").addEventListener("input",()=>document.querySelectorAll(".maint-chip").forEach(c=>c.classList.remove("active")));
+$("maintDone").addEventListener("change",()=>{$("maintNoteField").hidden=!$("maintDone").checked;});
+$("maintSaveBtn").addEventListener("click",()=>saveMaintenance(false));
+$("maintClearBtn").addEventListener("click",()=>saveMaintenance(true));
+$("maintCancelBtn").addEventListener("click",closeMaintenanceModal);
+$("closeMaintBtn").addEventListener("click",closeMaintenanceModal);
+$("maintenanceModal").addEventListener("click",e=>{if(e.target===$("maintenanceModal"))closeMaintenanceModal();});
 $("movementSplitToggle").addEventListener("change",toggleMovementSplit);
 $("movementSplitAddBtn").addEventListener("click",()=>addSplitRow("",1).focus());
 $("closeViewBtn").addEventListener("click",closeViewModal);
