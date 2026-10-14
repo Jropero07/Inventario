@@ -1915,3 +1915,6 @@ td.actions:empty { display: table-cell; }
   table.cards-mobile td.actions .mini-btn { flex: 1 1 calc(33% - 6px); }
   .view-actions .mini-btn:last-child:nth-child(odd) { flex-basis: 100%; }
 }
+.access-log-foot { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.access-log-buttons { display: flex; gap: 8px; }
+.access-log-buttons .btn[hidden] { display: none; }

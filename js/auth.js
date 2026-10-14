@@ -306,6 +306,8 @@ function listenAdminData() {
 }
 
 let accessLog = [];
+const ACCESS_LOG_STEP = 5;
+let accessLogLimit = ACCESS_LOG_STEP;
 function renderAccessLog() {
   const body = $("accessLogBody"); if (!body) return;
   const q = clean($("accessLogSearch").value, 60).toLowerCase();
@@ -313,12 +315,15 @@ function renderAccessLog() {
     .filter(a => !q || `${a.usuario} ${a.evento} ${a.detalle}`.toLowerCase().includes(q))
     .sort((a, b) => (b.fecha || 0) - (a.fecha || 0));
   body.replaceChildren();
-  rows.forEach(a => {
+  const visible = rows.slice(0, accessLogLimit);
+  visible.forEach(a => {
     const tr = document.createElement("tr");
     tr.append(td(new Date(a.fecha || 0).toLocaleString("es-CO")), td(a.usuario || "—"), td(a.evento || "—"), td(a.detalle || "—"));
     body.appendChild(tr);
   });
-  $("accessLogCount").textContent = `${rows.length} eventos (últimos 300 registrados)`;
+  $("accessLogCount").textContent = rows.length ? `Mostrando ${visible.length} de ${rows.length} eventos${q ? " encontrados" : ""}` : "Sin eventos";
+  $("accessLogMoreBtn").hidden = visible.length >= rows.length;
+  $("accessLogLessBtn").hidden = accessLogLimit <= ACCESS_LOG_STEP;
 }
 
 function renderPermChecks() {
@@ -490,12 +495,14 @@ export async function initAuth(database, onReady) {
   $("closeChangePasswordBtn").addEventListener("click", () => closeModal("changePasswordModal"));
   $("cancelChangePasswordBtn").addEventListener("click", () => closeModal("changePasswordModal"));
   $("changePasswordForm").addEventListener("submit", submitChangePassword);
-  $("manageUsersBtn").addEventListener("click", () => { resetUserForm(); openModal("usersModal"); });
+  $("manageUsersBtn").addEventListener("click", () => { resetUserForm(); accessLogLimit = ACCESS_LOG_STEP; $("accessLogSearch").value = ""; renderAccessLog(); openModal("usersModal"); });
   $("closeUsersBtn").addEventListener("click", () => closeModal("usersModal"));
   $("userRole").addEventListener("change", togglePermBox);
   $("userForm").addEventListener("submit", submitUserForm);
   $("userResetBtn").addEventListener("click", resetUserForm);
-  $("accessLogSearch").addEventListener("input", renderAccessLog);
+  $("accessLogSearch").addEventListener("input", () => { accessLogLimit = ACCESS_LOG_STEP; renderAccessLog(); });
+  $("accessLogMoreBtn").addEventListener("click", () => { accessLogLimit += 20; renderAccessLog(); });
+  $("accessLogLessBtn").addEventListener("click", () => { accessLogLimit = ACCESS_LOG_STEP; renderAccessLog(); });
   document.addEventListener("keydown", e => {
     if (e.key !== "Escape") return;
     if (!$("usersModal").hidden) closeModal("usersModal");
