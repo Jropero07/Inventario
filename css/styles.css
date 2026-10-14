@@ -1932,3 +1932,10 @@ td.actions:empty { display: table-cell; }
 .split-del { font-size: 18px; color: var(--muted); }
 .split-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 #movementSplitTotal.over { color: var(--danger); }
+
+/* Logo institucional */
+.brand-mark.brand-logo { background: #ffffff; padding: 2px; border-radius: 50%; overflow: hidden; flex: 0 0 auto; }
+.brand-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.sidebar .brand-mark.brand-logo { width: 46px; height: 46px; }
+.auth-brand .brand-mark.brand-logo { width: 56px; height: 56px; background: #ffffff; box-shadow: 0 0 0 1px var(--line); }
+@media (max-width: 720px) { .sidebar .brand-mark.brand-logo { width: 38px; height: 38px; } }
