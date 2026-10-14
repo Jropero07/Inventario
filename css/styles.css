@@ -1968,3 +1968,13 @@ td.actions:empty { display: table-cell; }
 .idle-body h3 { margin: 8px 0 6px; }
 .idle-body p { margin: 0; color: var(--muted); }
 .idle-body strong { color: var(--text); }
+
+/* Pestaña de mantenimiento en Alertas */
+.maint-alerts-wrap { margin-top: 12px; }
+.maint-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.maint-toolbar select { width: auto; min-width: 240px; }
+.maint-export { display: flex; gap: 8px; }
+.maint-mode-hidden { display: none !important; }
+#criticalList[hidden], #maintenanceCount[hidden] { display: none; }
+.alert-filter .badge { margin-left: 4px; }
+@media (max-width: 720px) { .maint-toolbar select { min-width: 0; width: 100%; } .maint-export { width: 100%; } .maint-export .btn { flex: 1; } }

@@ -232,16 +232,25 @@
       <section id="alertas" class="panel">
         <div class="panel-head">
           <div><h2>Alertas y Requerimientos</h2><p>Consumibles con stock crítico o en nivel preventivo según el mínimo establecido.</p></div>
-          <button id="generateOrderBtn" class="btn primary" data-perm="orden"><i class="fa-solid fa-file-circle-plus" aria-hidden="true"></i><span>Generar Orden de Requerimiento</span></button>
+          <button id="generateOrderBtn" class="btn primary" data-perm="orden" data-hide-maint><i class="fa-solid fa-file-circle-plus" aria-hidden="true"></i><span>Generar Orden de Requerimiento</span></button>
         </div>
         <div class="alert-filter-tabs" role="tablist" aria-label="Filtro de urgencia">
           <button type="button" class="alert-filter active" data-alert-filter="all">Todas</button>
           <button type="button" class="alert-filter" data-alert-filter="critical">Solo Críticas</button>
           <button type="button" class="alert-filter" data-alert-filter="preventive">Solo Preventivas</button>
+          <button type="button" class="alert-filter" data-alert-filter="maintenance">Mantenimiento <span id="maintenanceCount" class="badge alert" hidden>0</span></button>
         </div>
         <div id="maintenanceAlertsWrap" class="maint-alerts-wrap" hidden>
-          <h3><i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i> Mantenimientos preventivos <span id="maintenanceCount" class="badge alert">0</span></h3>
-          <p class="muted-text">Activos con mantenimiento vencido o programado en los próximos 15 días.</p>
+          <div class="maint-toolbar">
+            <select id="maintScope" aria-label="Mostrar mantenimientos">
+              <option value="due">Vencidos y próximos 15 días</option>
+              <option value="all">Todos los programados</option>
+            </select>
+            <div class="maint-export" data-perm="exportar">
+              <button id="maintExcelBtn" type="button" class="btn secondary"><i class="fa-solid fa-file-excel" aria-hidden="true"></i><span>Excel</span></button>
+              <button id="maintPdfBtn" type="button" class="btn secondary"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i><span>PDF</span></button>
+            </div>
+          </div>
           <div id="maintenanceAlerts" class="maint-alerts"></div>
         </div>
         <div id="criticalList" class="critical-grid"></div>

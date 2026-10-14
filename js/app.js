@@ -97,6 +97,7 @@ function normalizeItem(raw) {
     prioridadAlerta: raw.prioridadAlerta === "Baja" ? "Baja" : "Alta",
     especificaciones: upperText(raw.especificaciones, LIMITS.especificaciones),
     proximoMantenimiento: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.proximoMantenimiento||"")) ? raw.proximoMantenimiento : "",
+    ultimoMantenimiento: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.ultimoMantenimiento||"")) ? raw.ultimoMantenimiento : "",
     // Auditoría independiente: creación y última modificación.
     fechaCreacion: Number.isFinite(raw.fechaCreacion) ? raw.fechaCreacion : (Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now()),
     fechaUltimaModificacion: Number.isFinite(raw.fechaUltimaModificacion)
@@ -301,6 +302,7 @@ async function guardarItemFirebase(item, existingId="") {
 
     // La fecha de mantenimiento solo se cambia desde "Mantenimiento"; el formulario de edición la conserva
     if(!item.proximoMantenimiento) clean.proximoMantenimiento=before.proximoMantenimiento||"";
+    if(!item.ultimoMantenimiento) clean.ultimoMantenimiento=before.ultimoMantenimiento||"";
     const now=Date.now();
     const created=Number.isFinite(before.fechaCreacion) ? before.fechaCreacion : (Number.isFinite(before.createdAt) ? before.createdAt : now);
     const changed=hasRealItemChange(before,clean);
@@ -672,7 +674,7 @@ function openViewModal(item){
       ? [["Estado",current.estado],["Espacio / Ubicación",displayLocation(current)],["Responsable",current.responsable],["Fecha de asignación",fmtDate(current.fechaAsignacion)]]
       : [["Espacio / Ubicación",current.espacio],["Unidad",current.unidad],["Stock actual",String(current.stockActual)],["Stock mínimo",String(current.stockMinimo)],["Prioridad de alerta",current.prioridadAlerta]]),
     ["Fecha de ingreso",fmtDate(current.fechaIngreso)],
-    ...(current.tipo==="Activo" ? [["Próximo mantenimiento",maintenanceLabel(current)]] : []),
+    ...(current.tipo==="Activo" ? [["Último mantenimiento",current.ultimoMantenimiento?current.ultimoMantenimiento.split("-").reverse().join("/"):"Sin registro"],["Próximo mantenimiento",maintenanceLabel(current)]] : []),
     ["Creado",creation?fmtDateTime(creation):""],["Última modificación",modification?fmtDateTime(modification):"Sin modificaciones"],
     ["Especificaciones",current.especificaciones,true]
   ];
@@ -754,7 +756,7 @@ function filteredAlerts() {
   const alerts=inventario.filter(item=>alertLevel(item));
   if(alertFilter==="critical") return alerts.filter(item=>alertLevel(item)==="critical");
   if(alertFilter==="preventive") return alerts.filter(item=>alertLevel(item)==="preventive");
-  return alerts;
+  return alerts; // "Todas" y "Mantenimiento" no alteran los consumibles de la orden
 }
 
 /* ---------- Mantenimiento preventivo ---------- */
@@ -795,21 +797,70 @@ async function saveMaintenance(clear=false){
   if(!clear && !/^\d{4}-\d{2}-\d{2}$/.test(date)){showToast("Elija la fecha del próximo mantenimiento.",true);return;}
   const item=maintenanceItem, now=Date.now();
   try{
-    await update(ref(db,`inventario/${item.idFirebase}`),{proximoMantenimiento:date,fechaUltimaModificacion:now,updatedAt:now});
+    const changes={proximoMantenimiento:date,fechaUltimaModificacion:now,updatedAt:now};
+    if($("maintDone").checked) changes.ultimoMantenimiento=maintStamp();
+    await update(ref(db,`inventario/${item.idFirebase}`),changes);
     if($("maintDone").checked) await addLifecycleEvent(item,"Mantenimiento realizado",upperText($("maintNote").value,LIMITS.especificaciones)||"MANTENIMIENTO PREVENTIVO REALIZADO");
     await addLifecycleEvent(item,clear?"Mantenimiento desprogramado":"Mantenimiento programado",clear?"":`Próximo mantenimiento: ${date.split("-").reverse().join("/")}`);
     closeMaintenanceModal();
     showToast(clear?"Mantenimiento desprogramado.":`Próximo mantenimiento: ${date.split("-").reverse().join("/")}.`);
   }catch(error){ console.error(error); showToast("No se pudo guardar el mantenimiento.",true); }
 }
+function maintenanceList(scope="due"){
+  return inventario.filter(i=>i.tipo==="Activo" && i.estado!=="Baja" && i.proximoMantenimiento)
+    .map(i=>({item:i,days:daysUntil(i.proximoMantenimiento)})).filter(x=>x.days!==null && (scope==="all" || x.days<=MAINT_WARNING_DAYS))
+    .sort((a,b)=>a.days-b.days||a.item.nombre.localeCompare(b.item.nombre,"es"));
+}
+function maintenanceExportRows(){
+  const fmt=v=>v?String(v).split("-").reverse().join("/"):"";
+  return maintenanceList($("maintScope").value).map(({item,days})=>({
+    "Código":item.codigo,"Nombre":item.nombre,"Categoría":item.categoria,"Marca":item.marca,"Modelo":item.modelo,"Serial":item.serial,
+    "Estado":item.estado,"Espacio / Ubicación":item.espacio,"Responsable":item.responsable,
+    "Último mantenimiento":fmt(item.ultimoMantenimiento),"Próximo mantenimiento":fmt(item.proximoMantenimiento),
+    "Situación":days<0?`VENCIDO (${-days} día${days===-1?"":"s"})`:days===0?"HOY":`En ${days} día${days===1?"":"s"}`,
+    "Especificaciones":item.especificaciones
+  }));
+}
+function maintStamp(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
+function exportMaintenanceExcel(){
+  if(!allowed("exportar")) return;
+  const rows=maintenanceExportRows(); if(!rows.length){showToast("No hay mantenimientos para exportar.",true);return;}
+  const cols=Object.keys(rows[0]).filter(k=>rows.some(r=>String(r[k]??"").trim()));
+  const ws=XLSX.utils.aoa_to_sheet([["Mantenimientos preventivos"],[`Exportado: ${new Date().toLocaleString("es-CO")} · ${rows.length} activos · ${$("maintScope").selectedOptions[0].text}`],[]]);
+  XLSX.utils.sheet_add_json(ws,rows.map(r=>Object.fromEntries(cols.map(c=>[c,r[c]]))),{origin:"A4",header:cols});
+  ws["!cols"]=cols.map(c=>({wch:c==="Especificaciones"?40:c==="Nombre"?28:18}));
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Mantenimientos");
+  XLSX.writeFile(wb,`mantenimientos_${maintStamp()}.xlsx`);
+}
+function exportMaintenancePdf(){
+  if(!allowed("exportar")) return;
+  const rows=maintenanceExportRows(); if(!rows.length){showToast("No hay mantenimientos para exportar.",true);return;}
+  const cols=Object.keys(rows[0]).filter(k=>rows.some(r=>String(r[k]??"").trim()));
+  const wrap=document.createElement("div"); wrap.style.cssText="background:#fff;color:#111;padding:18px;font-family:Arial,Helvetica,sans-serif;width:1100px";
+  const head=document.createElement("div"); head.style.cssText="display:flex;align-items:center;gap:12px;margin-bottom:10px";
+  const logo=document.createElement("img"); logo.src="assets/logo_colegio_160.png"; logo.style.cssText="width:54px;height:54px";
+  const t=document.createElement("div"); const h=makeEl("h2","Mantenimientos preventivos"); h.style.margin="0";
+  const sub=makeEl("p",`Exportado: ${new Date().toLocaleString("es-CO")} · ${rows.length} activos · ${$("maintScope").selectedOptions[0].text}`); sub.style.cssText="margin:2px 0 0;color:#555";
+  t.append(h,sub); head.append(logo,t); wrap.appendChild(head);
+  const table=document.createElement("table"); table.style.cssText="width:100%;border-collapse:collapse;font-size:10px";
+  const hr=document.createElement("tr"); cols.forEach(c=>{const th=makeEl("th",c);th.style.cssText="border:1px solid #bfc7d4;padding:5px;background:#eef2f7;text-align:left";hr.appendChild(th);}); table.appendChild(hr);
+  rows.forEach(r=>{const tr=document.createElement("tr");tr.style.pageBreakInside="avoid";const overdue=String(r["Situación"]).startsWith("VENCIDO");cols.forEach(c=>{const td=makeEl("td",String(r[c]??""));td.style.cssText=`border:1px solid #d6dbe3;padding:5px;vertical-align:top;${c==="Situación"&&overdue?"color:#c62828;font-weight:700":""}`;tr.appendChild(td);});table.appendChild(tr);});
+  wrap.appendChild(table);
+  html2pdf().set({margin:8,filename:`mantenimientos_${maintStamp()}.pdf`,html2canvas:{scale:2},jsPDF:{orientation:"landscape",unit:"mm",format:"letter"},pagebreak:{mode:["css","legacy"]}}).from(wrap).save();
+}
+
 function renderMaintenanceAlerts(){
   const box=$("maintenanceAlerts"); if(!box) return;
-  const list=inventario.filter(i=>i.tipo==="Activo" && i.estado!=="Baja" && i.proximoMantenimiento)
-    .map(i=>({item:i,days:daysUntil(i.proximoMantenimiento)})).filter(x=>x.days!==null && x.days<=MAINT_WARNING_DAYS)
-    .sort((a,b)=>a.days-b.days);
+  const dueCount=maintenanceList("due").length;
+  $("maintenanceCount").textContent=String(dueCount);
+  $("maintenanceCount").hidden=!dueCount;
+  const inMaint=alertFilter==="maintenance";
+  $("maintenanceAlertsWrap").hidden=!inMaint;
+  $("criticalList").hidden=inMaint;
+  document.querySelectorAll("[data-hide-maint]").forEach(el=>el.classList.toggle("maint-mode-hidden",inMaint));
+  const list=maintenanceList($("maintScope").value);
   box.replaceChildren();
-  $("maintenanceAlertsWrap").hidden=!list.length;
-  $("maintenanceCount").textContent=String(list.length);
+  if(!list.length){ box.appendChild(makeEl("p",$("maintScope").value==="all"?"No hay activos con mantenimiento programado.":"No hay mantenimientos vencidos ni próximos en los siguientes 15 días.","muted")); return; }
   list.forEach(({item,days})=>{
     const row=document.createElement("div"); row.className=`maint-alert ${days<0?"overdue":days<=3?"soon":""}`;
     const info=document.createElement("div"); info.append(makeEl("strong",item.nombre),makeEl("span",`${item.codigo} · ${item.espacio||"Sin ubicación"}`));
@@ -821,6 +872,7 @@ function renderMaintenanceAlerts(){
 
 function renderCriticals() {
   renderMaintenanceAlerts();
+  if(alertFilter==="maintenance"){ const allA=inventario.filter(i=>alertLevel(i)); $("criticalBadge").textContent=String(allA.filter(i=>alertLevel(i)==="critical").length); document.querySelectorAll(".alert-filter").forEach(btn=>btn.classList.toggle("active",btn.dataset.alertFilter===alertFilter)); return; }
   const allAlerts=inventario.filter(i=>alertLevel(i));
   const alertIds=new Set(allAlerts.map(i=>i.idFirebase));
   [...selectedAlertIds].forEach(id=>{ if(!alertIds.has(id)) selectedAlertIds.delete(id); });
@@ -2188,6 +2240,9 @@ document.querySelectorAll(".maint-chip").forEach(chip=>chip.addEventListener("cl
 $("maintDate").addEventListener("input",()=>document.querySelectorAll(".maint-chip").forEach(c=>c.classList.remove("active")));
 $("maintDone").addEventListener("change",()=>{$("maintNoteField").hidden=!$("maintDone").checked;});
 $("maintSaveBtn").addEventListener("click",()=>saveMaintenance(false));
+$("maintScope").addEventListener("change",renderMaintenanceAlerts);
+$("maintExcelBtn").addEventListener("click",exportMaintenanceExcel);
+$("maintPdfBtn").addEventListener("click",exportMaintenancePdf);
 $("maintClearBtn").addEventListener("click",()=>saveMaintenance(true));
 $("maintCancelBtn").addEventListener("click",closeMaintenanceModal);
 $("closeMaintBtn").addEventListener("click",closeMaintenanceModal);
