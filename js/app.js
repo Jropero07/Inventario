@@ -407,9 +407,43 @@ function openMovementModal(idFirebase, delta) {
   $("movementQuantity").value="1";
   $("movementQuantity").max=isEntry ? "" : String(item.stockActual);
   $("movementDestination").value=item.espacio || "";
+  // Reparto en varios destinos (solo salidas)
+  $("movementSplitWrap").hidden=isEntry;
+  $("movementSplitToggle").checked=false;
+  $("movementSplitRows").replaceChildren();
+  toggleMovementSplit();
+  const spaces=new Set([...inventario.map(i=>i.espacio),...movimientos.map(m=>m.espacioDestino)].filter(Boolean));
+  $("spaceOptions").replaceChildren(...[...spaces].sort((a,b)=>a.localeCompare(b,"es")).map(v=>{const o=document.createElement("option");o.value=v;return o;}));
   $("movementModal").hidden=false;
   $("movementModal").setAttribute("aria-hidden","false");
   setTimeout(()=>$("movementQuantity").focus(),50);
+}
+
+/* ---------- Salida repartida en varios destinos ---------- */
+function addSplitRow(dest="",qty=1){
+  const row=document.createElement("div"); row.className="split-row";
+  const d=document.createElement("input"); d.className="split-dest"; d.maxLength=120; d.placeholder="Ej. SALA 3"; d.setAttribute("list","spaceOptions"); d.value=dest; d.setAttribute("aria-label","Destino");
+  const q=document.createElement("input"); q.className="split-qty"; q.type="number"; q.min="1"; q.step="1"; q.inputMode="numeric"; q.value=String(qty); q.setAttribute("aria-label","Cantidad");
+  const del=document.createElement("button"); del.type="button"; del.className="icon-btn split-del"; del.title="Quitar destino"; del.setAttribute("aria-label","Quitar destino"); del.innerHTML='<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+  del.addEventListener("click",()=>{ if($("movementSplitRows").children.length>2){ row.remove(); updateSplitTotal(); } else showToast("Se necesitan al menos 2 destinos para repartir.",true); });
+  q.addEventListener("input",updateSplitTotal);
+  row.append(d,q,del); $("movementSplitRows").appendChild(row); updateSplitTotal();
+  return d;
+}
+function getSplitRows(){
+  return [...$("movementSplitRows").querySelectorAll(".split-row")].map(r=>({destino:upperText(r.querySelector(".split-dest").value,LIMITS.espacio),cantidad:safeInt(r.querySelector(".split-qty").value)}));
+}
+function updateSplitTotal(){
+  const total=getSplitRows().reduce((s,r)=>s+(r.cantidad||0),0);
+  const item=pendingMovement&&inventario.find(i=>i.idFirebase===pendingMovement.id);
+  $("movementSplitTotal").textContent=`Total: ${total}${item?` de ${item.stockActual} disponibles`:""}`;
+  $("movementSplitTotal").classList.toggle("over",!!item && total>item.stockActual);
+}
+function toggleMovementSplit(){
+  const on=$("movementSplitToggle").checked;
+  $("movementSingleFields").hidden=on;
+  $("movementSplitFields").hidden=!on;
+  if(on && !$("movementSplitRows").children.length){ addSplitRow("",1).focus(); addSplitRow("",1); }
 }
 
 function closeMovementModal(){
@@ -418,7 +452,7 @@ function closeMovementModal(){
   $("movementModal").setAttribute("aria-hidden","true");
 }
 
-async function registrarMovimientoStock(idFirebase, delta, cantidad, destination) {
+async function registrarMovimientoStock(idFirebase, delta, cantidad, destination, splits=null) {
   const item=inventario.find(entry=>entry.idFirebase===idFirebase);
   if(!item || item.tipo!=="Consumible") throw new Error("El consumible ya no está disponible.");
   if(!can("movimientos")) throw new Error("No tiene permiso para realizar esta acción.");
@@ -452,14 +486,15 @@ async function registrarMovimientoStock(idFirebase, delta, cantidad, destination
   const finalStock=safeInt(committedSnapshot?.stockActual);
   if(finalStock===null) throw new Error("Firebase devolvió un stock no válido.");
 
-  const movementSaved=await registrarMovimiento(
-    { ...item, stockActual:finalStock },
-    delta>0 ? "Entrada" : "Salida",
-    cantidad,
-    destination
-  );
+  // Una salida repartida queda como un movimiento por cada destino (el stock se descuenta una sola vez)
+  const parts=splits && splits.length ? splits : [{destino:destination,cantidad}];
+  let movementSaved=true;
+  for(const part of parts){
+    const ok=await registrarMovimiento({ ...item, stockActual:finalStock }, delta>0 ? "Entrada" : "Salida", part.cantidad, part.destino);
+    movementSaved=movementSaved && ok;
+  }
   syncFirestoreAsset({...item,stockActual:finalStock,idFirebase:id},id);
-  addLifecycleEvent({...item,stockActual:finalStock,idFirebase:id},"Ajuste de stock",`${delta>0?"Entrada":"Salida"} de ${cantidad} unidad${cantidad===1?"":"es"}`);
+  addLifecycleEvent({...item,stockActual:finalStock,idFirebase:id},"Ajuste de stock",`${delta>0?"Entrada":"Salida"} de ${cantidad} unidad${cantidad===1?"":"es"}${parts.length>1?` repartida en ${parts.length} destinos`:""}`);
   return { finalStock, movementSaved };
 }
 
@@ -467,10 +502,19 @@ async function submitMovement(event){
   event.preventDefault();
   if(!pendingMovement) return;
 
-  const quantity=safeInt($("movementQuantity").value);
-  const destination=upperText($("movementDestination").value,LIMITS.espacio);
+  let quantity=safeInt($("movementQuantity").value);
+  let destination=upperText($("movementDestination").value,LIMITS.espacio);
   const {id,delta}=pendingMovement;
   const item=inventario.find(entry=>entry.idFirebase===id);
+  let splits=null;
+  if(delta<0 && $("movementSplitToggle").checked){
+    splits=getSplitRows();
+    if(splits.length<2){showToast("Agregue al menos 2 destinos para repartir.",true);return;}
+    if(splits.some(s=>!s.destino)){showToast("Indique el destino en cada fila.",true);return;}
+    if(splits.some(s=>s.cantidad===null||s.cantidad<1)){showToast("Cada destino debe tener una cantidad entera mayor que 0.",true);return;}
+    quantity=splits.reduce((s,r)=>s+r.cantidad,0);
+    destination=splits.map(s=>s.destino).join(", ");
+  }
 
   if(quantity===null || quantity<1){showToast("La cantidad debe ser un número entero mayor que 0.",true);return;}
   if(!destination){showToast("Indique el espacio o lugar de destino.",true);return;}
@@ -478,9 +522,9 @@ async function submitMovement(event){
   if(delta<0 && quantity>item.stockActual){showToast(`No hay suficiente stock. Disponible: ${item.stockActual}.`,true);return;}
 
   try{
-    const result=await registrarMovimientoStock(id,delta,quantity,destination);
+    const result=await registrarMovimientoStock(id,delta,quantity,destination,splits);
     closeMovementModal();
-    const actionText=delta>0 ? `Entrada de ${quantity} unidad${quantity===1?"":"es"} registrada.` : `Salida de ${quantity} unidad${quantity===1?"":"es"} registrada.`;
+    const actionText=delta>0 ? `Entrada de ${quantity} unidad${quantity===1?"":"es"} registrada.` : `Salida de ${quantity} unidad${quantity===1?"":"es"} registrada${splits?` en ${splits.length} destinos`:""}.`;
     showToast(result.movementSaved ? actionText : `${actionText} La auditoría de movimientos no pudo sincronizarse.` , !result.movementSaved);
   }catch(error){
     console.error("Error al registrar movimiento:",error);
@@ -2071,6 +2115,8 @@ signInAnonymously(getAuth(app))
     showToast("Active el inicio de sesión Anónimo en Firebase Authentication para proteger la base de datos.",true);
   })
   .finally(()=>initAuth(db,startRealtime));
+$("movementSplitToggle").addEventListener("change",toggleMovementSplit);
+$("movementSplitAddBtn").addEventListener("click",()=>addSplitRow("",1).focus());
 $("closeViewBtn").addEventListener("click",closeViewModal);
 $("viewModal").addEventListener("click",e=>{if(e.target===$("viewModal"))closeViewModal();});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("viewModal").hidden)closeViewModal();});

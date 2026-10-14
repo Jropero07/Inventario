@@ -1918,3 +1918,17 @@ td.actions:empty { display: table-cell; }
 .access-log-foot { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 .access-log-buttons { display: flex; gap: 8px; }
 .access-log-buttons .btn[hidden] { display: none; }
+
+/* Salida repartida en varios destinos */
+.split-toggle { margin: 4px 0 2px; font-weight: 700; color: var(--blue); }
+.split-toggle[hidden], #movementSingleFields[hidden], .split-fields[hidden] { display: none; }
+#movementSingleFields { display: grid; gap: 12px; }
+.split-fields { display: grid; gap: 6px; }
+.split-head, .split-row { display: grid; grid-template-columns: minmax(0, 1fr) 80px 32px; gap: 8px; align-items: center; }
+.split-head span { font-size: 12px; font-weight: 700; color: var(--muted); }
+#movementSplitRows { display: grid; gap: 6px; }
+.split-row input { padding: 8px; }
+.split-row .split-dest { text-transform: uppercase; }
+.split-del { font-size: 18px; color: var(--muted); }
+.split-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+#movementSplitTotal.over { color: var(--danger); }
