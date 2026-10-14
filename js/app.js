@@ -1,6 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js";
 import { getDatabase, ref, push, set, onValue, remove, update, runTransaction } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-database.js";
 import { getFirestore, collection, doc, setDoc, addDoc, getDocs, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-firestore.js";
+import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.4.0/firebase-auth.js";
 import { initAuth, can, getCurrentUser } from "./auth.js";
 
 const firebaseConfig = {
@@ -2062,7 +2063,14 @@ try {
   },error=>console.warn("No se pudo escuchar movimientos en Firestore.",error));
 } catch(error) { console.warn("No se pudo inicializar el listener de movimientos de Firestore.",error); }
 }
-initAuth(db,startRealtime);
+/* Sesión técnica de Firebase (anónima): permite que las reglas exijan "auth != null"
+   y bloqueen el acceso directo a la base de datos desde fuera de la aplicación. */
+signInAnonymously(getAuth(app))
+  .catch(error=>{
+    console.error("Firebase Authentication (anónimo) no disponible:",error);
+    showToast("Active el inicio de sesión Anónimo en Firebase Authentication para proteger la base de datos.",true);
+  })
+  .finally(()=>initAuth(db,startRealtime));
 $("closeViewBtn").addEventListener("click",closeViewModal);
 $("viewModal").addEventListener("click",e=>{if(e.target===$("viewModal"))closeViewModal();});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("viewModal").hidden)closeViewModal();});

@@ -1,0 +1,49 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "inventario": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      "$id": {
+        ".validate": "newData.hasChildren(['codigo', 'nombre', 'tipo'])"
+      }
+    },
+
+    "movimientos": {
+      ".read": "auth != null",
+      "$id": {
+        ".write": "auth != null",
+        ".validate": "newData.hasChildren(['fechaHora', 'tipoAccion'])"
+      }
+    },
+
+    "papelera": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+
+    "usuarios": {
+      ".read": "auth != null",
+      "$uid": {
+        ".write": "auth != null",
+        ".validate": "newData.hasChildren(['usuario', 'rol', 'hash', 'salt'])"
+      }
+    },
+
+    "solicitudesClave": {
+      ".read": "auth != null",
+      "$id": {
+        ".write": "auth != null"
+      }
+    },
+
+    "accesos": {
+      ".read": "auth != null",
+      "$id": {
+        ".write": "auth != null && !data.exists()"
+      }
+    }
+  }
+}
