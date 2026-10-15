@@ -2062,3 +2062,9 @@ td.actions:empty { display: table-cell; }
 @media (max-width: 720px) {
   :root[data-theme="dark"] .tab.active { background: #ffffff; color: var(--navy); }
 }
+
+/* Centrado exacto de botones del menú lateral */
+.user-actions .btn { display: flex; align-items: center; justify-content: center; }
+.user-actions .btn > i { margin: 0; }
+.json-actions .btn { display: inline-flex; align-items: center; justify-content: center; text-align: center; gap: 7px; }
+.json-actions .btn > i { margin: 0; }
