@@ -1,7 +1,7 @@
 /* Service worker: permite instalar la app y abrirla rápido.
    Estrategia "red primero" para los archivos propios (siempre la versión más reciente si hay internet)
    y copia de respaldo para abrir la interfaz sin conexión. Los datos de Firebase NO se guardan aquí. */
-const CACHE = "invti-v44";
+const CACHE = "invti-v45";
 const SHELL = ["./", "index.html", "css/styles.css", "js/app.js", "js/auth.js", "js/theme.js", "manifest.webmanifest",
   "assets/logo_colegio_160.png", "assets/favicon.png", "assets/icon-192.png", "assets/logo_efqm.png", "assets/logo_colegio.png"];
 const CDN_HOSTS = ["cdnjs.cloudflare.com", "unpkg.com", "www.gstatic.com"];
