@@ -236,7 +236,7 @@ function withTimeout(promise, ms=5000) {
   return Promise.race([promise, new Promise((_,reject)=>setTimeout(()=>reject(new Error("Tiempo de espera agotado en Firestore.")),ms))]);
 }
 
-async function registrarMovimiento(item, tipoAccion, cantidad=0, espacioDestino="") {
+async function registrarMovimiento(item, tipoAccion, cantidad=0, espacioDestino="", detalle="") {
   const qty=safeInt(cantidad);
   const movimiento={
     fechaHora:Date.now(),
@@ -249,6 +249,7 @@ async function registrarMovimiento(item, tipoAccion, cantidad=0, espacioDestino=
     espacioDestino:upperText(espacioDestino,LIMITS.espacio),
     usuario:currentUserName()
   };
+  if(detalle) movimiento.detalle=sanitizeText(detalle,1000);
   const movementRef=push(movimientosRef);
   // Espejo de auditoría en Firestore: no bloquea ni afecta el resultado de RTDB.
   withTimeout(setDoc(doc(firestore,"movimientos",movementRef.key),{...movimiento,idEvento:movementRef.key}))
@@ -284,6 +285,13 @@ async function addLifecycleEvent(item,eventType,details="") {
   } catch(error) { console.warn("No se pudo registrar evento en Hoja de Vida.",error); }
 }
 
+/* Campos auditables: etiqueta legible para el detalle "antes → después" */
+const AUDIT_FIELDS=[["codigo","Código"],["nombre","Nombre"],["categoria","Categoría"],["marca","Marca"],["modelo","Modelo"],["serial","Serial"],["estado","Estado"],["espacio","Ubicación"],["responsable","Responsable"],["fechaIngreso","Fecha de ingreso"],["fechaAsignacion","Fecha de asignación"],["unidad","Unidad"],["stockActual","Stock"],["stockMinimo","Stock mínimo"],["prioridadAlerta","Prioridad"],["especificaciones","Especificaciones"]];
+function describeChanges(before,after){
+  const b=normalizeItem(before), a=normalizeItem(after);
+  return AUDIT_FIELDS.filter(([k])=>String(b[k]??"")!==String(a[k]??"")).map(([k,label])=>`${label}: ${String(b[k]??"")||"—"} → ${String(a[k]??"")||"—"}`).join("; ");
+}
+
 function itemComparable(item) {
   const x=normalizeItem(item);
   delete x.idFirebase; delete x.createdAt; delete x.updatedAt; delete x.fechaUltimaModificacion; delete x.fechaCreacion;
@@ -311,15 +319,17 @@ async function guardarItemFirebase(item, existingId="") {
     clean.createdAt=created;
     clean.updatedAt=changed ? now : (Number(before.updatedAt)||created);
     if(!changed) return;
+    const changesText=describeChanges(before,clean);
     await update(ref(db,`inventario/${id}`), clean);
     await registrarMovimiento(
       { ...clean, idFirebase:id },
       "Edición",
       Math.abs(clean.tipo==="Consumible" ? (safeInt(clean.stockActual) ?? 0) - (safeInt(before.stockActual) ?? 0) : 0),
-      clean.espacio
+      clean.espacio,
+      changesText
     );
     syncFirestoreAsset({...clean,idFirebase:id},id);
-    addLifecycleEvent({...clean,idFirebase:id},"Edición","Cambio real de datos del activo");
+    addLifecycleEvent({...clean,idFirebase:id},"Edición",changesText||"Cambio de datos del activo");
     return;
   }
 
@@ -690,6 +700,7 @@ function openViewModal(item){
   recent.forEach(m=>{
     const row=document.createElement("div"); row.className="view-movement";
     row.append(makeEl("strong",`${m.tipoAccion}${m.cantidad?` · ${m.cantidad}`:""}`),makeEl("span",`${m.espacioDestino||"—"} · ${m.usuario||"—"} · ${fmtDateTime(m.fechaHora)}`));
+    if(m.detalle){ row.classList.add("has-detail"); row.append(makeEl("small",m.detalle,"change-detail")); }
     hist.appendChild(row);
   });
   const actions=$("viewActions"); actions.replaceChildren();
@@ -941,6 +952,82 @@ function movementBadge(item) {
 
 const expandedSpaces=new Set();
 
+/* ---------- Panel de inicio ---------- */
+function renderDashboard(){
+  if(!$("dashAssets")) return;
+  const assets=inventario.filter(i=>i.tipo==="Activo"), cons=inventario.filter(i=>i.tipo==="Consumible");
+  const count=(arr,f)=>arr.filter(f).length;
+  $("dashAssets").textContent=String(assets.length);
+  $("dashAssetsSub").textContent=`${count(assets,i=>i.estado==="Asignado")} asignados · ${count(assets,i=>i.estado==="Disponible")} disponibles`;
+  $("dashCons").textContent=String(cons.length);
+  const critical=count(inventario,i=>alertLevel(i)==="critical");
+  $("dashConsSub").textContent=`${count(cons,i=>alertLevel(i))} en alerta`;
+  $("dashCritical").textContent=String(critical);
+  const due=maintenanceList("due"), overdue=due.filter(x=>x.days<0).length;
+  $("dashMaint").textContent=String(due.length);
+  $("dashMaintSub").textContent=overdue?`${overdue} vencido${overdue===1?"":"s"} · ${due.length-overdue} próximo${due.length-overdue===1?"":"s"}`:"Vencidos o próximos 15 días";
+  document.querySelector('.dash-kpi[data-filter="critical"]').classList.toggle("is-alert",critical>0);
+  document.querySelector('.dash-kpi[data-filter="maintenance"]').classList.toggle("is-alert",overdue>0);
+
+  // Consumo mensual (6 meses)
+  const now=new Date(), months=[];
+  for(let k=5;k>=0;k--){ const d=new Date(now.getFullYear(),now.getMonth()-k,1); months.push({y:d.getFullYear(),m:d.getMonth(),qty:0}); }
+  movimientos.forEach(mv=>{
+    if(mv.tipo!=="Consumible" || !/^Salida/.test(String(mv.tipoAccion||""))) return;
+    const d=new Date(Number(mv.fechaHora)||0); const slot=months.find(x=>x.y===d.getFullYear()&&x.m===d.getMonth());
+    if(slot) slot.qty+=Math.max(0,(Number(mv.cantidad)||0)-(Number(mv.cantidadRevertida)||0));
+  });
+  const maxQ=Math.max(1,...months.map(x=>x.qty));
+  const chart=$("dashConsumption"); chart.replaceChildren();
+  chart.setAttribute("aria-label","Consumo mensual: "+months.map(x=>`${MONTHS_ES[x.m]} ${x.qty}`).join(", "));
+  months.forEach(x=>{
+    const col=document.createElement("div"); col.className="vbar-col"; col.title=`${MONTHS_ES[x.m]} ${x.y}: ${x.qty} unidades`;
+    const val=makeEl("span",String(x.qty),"vbar-val");
+    const track=document.createElement("div"); track.className="vbar-track";
+    const bar=document.createElement("div"); bar.className="vbar"; bar.style.height=`${x.qty?Math.max(3,Math.round(x.qty/maxQ*100)):0}%`;
+    track.append(val,bar);
+    col.append(track,makeEl("span",MONTHS_ES[x.m].slice(0,3).toUpperCase(),"vbar-label"));
+    chart.appendChild(col);
+  });
+
+  const hbars=(boxId,entries,empty)=>{
+    const box=$(boxId); box.replaceChildren();
+    if(!entries.length){ box.appendChild(makeEl("p",empty,"muted-text")); return; }
+    const max=Math.max(1,...entries.map(e=>e[1]));
+    entries.forEach(([label,val])=>{
+      const row=document.createElement("div"); row.className="hbar-row"; row.title=`${label}: ${val}`;
+      const track=document.createElement("div"); track.className="hbar-track";
+      const bar=document.createElement("div"); bar.className="hbar"; bar.style.width=`${val?Math.max(2,Math.round(val/max*100)):0}%`;
+      track.appendChild(bar);
+      row.append(makeEl("span",label,"hbar-label"),track,makeEl("strong",String(val),"hbar-val"));
+      box.appendChild(row);
+    });
+  };
+  hbars("dashByState",["Disponible","Asignado","En mantenimiento","Baja"].map(s=>[s,count(assets,i=>i.estado===s)]),"Sin activos registrados.");
+  const cats=new Map(); assets.forEach(i=>cats.set(i.categoria||"SIN CATEGORÍA",(cats.get(i.categoria||"SIN CATEGORÍA")||0)+1));
+  const catEntries=[...cats.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],"es"));
+  const topCats=catEntries.slice(0,6); const rest=catEntries.slice(6).reduce((s,e)=>s+e[1],0);
+  if(rest) topCats.push(["OTRAS",rest]);
+  hbars("dashByCategory",topCats,"Sin activos registrados.");
+
+  const ml=$("dashMaintList"); ml.replaceChildren();
+  const next30=maintenanceList("all").filter(x=>x.days<=30).slice(0,5);
+  if(!next30.length) ml.appendChild(makeEl("p","No hay mantenimientos en los próximos 30 días.","muted-text"));
+  next30.forEach(({item,days})=>{
+    const row=document.createElement("button"); row.type="button"; row.className=`dash-row ${days<0?"overdue":""}`;
+    row.append(makeEl("span",item.nombre),makeEl("small",maintenanceLabel(item)));
+    row.addEventListener("click",()=>openViewModal(item)); ml.appendChild(row);
+  });
+  const lm=$("dashLastMoves"); lm.replaceChildren();
+  const last=[...movimientos].sort((a,b)=>(b.fechaHora||0)-(a.fechaHora||0)).slice(0,6);
+  if(!last.length) lm.appendChild(makeEl("p","Sin movimientos registrados.","muted-text"));
+  last.forEach(m=>{
+    const row=document.createElement("div"); row.className="dash-row";
+    row.append(makeEl("span",`${m.tipoAccion} · ${m.nombre}`),makeEl("small",`${m.cantidad?m.cantidad+" · ":""}${m.espacioDestino||"—"} · ${m.usuario||"—"} · ${fmtDateTime(m.fechaHora)}`));
+    lm.appendChild(row);
+  });
+}
+
 function renderAnalytics() {
   const consumables=inventario.filter(i=>i.tipo==="Consumible");
   const exits=movimientos.filter(m=>m.tipo==="Consumible" && /^Salida/.test(String(m.tipoAccion||"")));
@@ -1013,6 +1100,7 @@ function renderAnalytics() {
     const row=document.createElement("div"); row.className="rotation-row";
     row.append(makeEl("span",item.nombre),makeEl("strong",`${level(qty)} · ${qty} ${qty===1?"und":"unds"} · ${count} ${count===1?"salida":"salidas"}`)); rotList.appendChild(row);
   });
+  renderDashboard();
 }
 
 function movementActionCategory(m) {
@@ -1053,11 +1141,12 @@ function renderMovements() {
   const body=$("movementTableBody");body.replaceChildren();
   const data=filteredMovements().sort((a,b)=>(b.fechaHora||0)-(a.fechaHora||0));
   data.forEach(m=>{
-    const tr=document.createElement("tr");addCell(tr,fmtDateTime(m.fechaHora));addCell(tr,m.tipo||"—");addCell(tr,m.codigo);addCell(tr,m.serial||"—");addCell(tr,m.nombre);
+    const tr=document.createElement("tr");addCell(tr,fmtDateTime(m.fechaHora));tr.firstChild.dataset.sort=String(Number(m.fechaHora)||0);addCell(tr,m.tipo||"—");addCell(tr,m.codigo);addCell(tr,m.serial||"—");addCell(tr,m.nombre);
     const reverted=Number(m.cantidadRevertida)||0;
     const actionTd=document.createElement("td"); actionTd.append(makeEl("span",m.tipoAccion));
     if(reverted>0) actionTd.append(makeEl("small",reverted>=m.cantidad?" · revertida":` · revertida ${reverted} de ${m.cantidad}`,"reverted-note"));
     if(m.motivo) actionTd.title=m.motivo;
+    if(m.detalle) actionTd.append(makeEl("small",m.detalle,"change-detail"));
     tr.appendChild(actionTd);
     addCell(tr,String(m.cantidad));addCell(tr,m.espacioDestino||"—");addCell(tr,m.usuario||"—");
     const act=document.createElement("td"); act.className="actions";
@@ -1601,7 +1690,7 @@ async function submitTransfer(event){
     const now=Date.now();
     await update(itemRef,{espacio:destination,fechaUltimaModificacion:now,updatedAt:now});
     const updated={...transferItem,espacio:destination,fechaUltimaModificacion:now,updatedAt:now};
-    await registrarMovimiento(updated,"Edición",0,destination);
+    await registrarMovimiento(updated,"Edición",0,destination,`Ubicación: ${transferItem.espacio||"—"} → ${destination}`);
     syncFirestoreAsset(updated,id);
     addLifecycleEvent(updated,"Traslado de ubicación",`De ${transferItem.espacio||"sin ubicación"} a ${destination}`);
     closeTransferModal();
@@ -2118,10 +2207,72 @@ document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{act
 
 /* Vista móvil: cada fila de tabla se muestra como tarjeta con la etiqueta de su columna */
 function labelTableCells(table){
-  const heads=[...table.querySelectorAll("thead th")].map(th=>th.textContent.trim());
+  const heads=[...table.querySelectorAll("thead th")].map(th=>th.dataset.title||th.textContent.trim());
   table.querySelectorAll("tbody tr").forEach(tr=>[...tr.children].forEach((td,i)=>{ if(heads[i] && td.dataset.label!==heads[i]) td.dataset.label=heads[i]; }));
 }
-["inventoryTableBody","generalInventoryTableBody","movementTableBody","trashTableBody","usersTableBody","accessLogBody"].forEach(id=>{
+/* Ordenar por columna (clic en el encabezado) y paginación para tablas grandes */
+const PAGE_SIZES=[25,50,100,0];
+function cellSortValue(tr,col){ const td=tr.children[col]; if(!td) return ""; return td.dataset.sort ?? td.textContent.trim(); }
+function compareCells(a,b){
+  const ea=a===""||a==="—", eb=b===""||b==="—";
+  if(ea||eb) return ea===eb?0:(ea?1:-1);
+  const na=Number(a), nb=Number(b);
+  if(!Number.isNaN(na) && !Number.isNaN(nb)) return na-nb;
+  return a.localeCompare(b,"es",{numeric:true,sensitivity:"base"});
+}
+function enhanceTable(body){
+  const table=body.closest("table"), wrap=body.closest(".table-wrap")||table;
+  const st={col:-1,dir:1,page:1,size:25,lastCount:-1};
+  const ths=[...table.querySelectorAll("thead th")];
+  ths.forEach((th,i)=>{
+    const title=th.textContent.trim(); th.dataset.title=title;
+    if(/^acciones$/i.test(title)) return;
+    th.classList.add("sortable"); th.tabIndex=0; th.title="Ordenar por "+title;
+    const ind=document.createElement("span"); ind.className="sort-ind"; ind.setAttribute("aria-hidden","true"); th.appendChild(ind);
+    const toggle=()=>{ if(st.col!==i){st.col=i;st.dir=1;} else if(st.dir===1){st.dir=-1;} else {st.col=-1;st.dir=1;} st.page=1; apply(); };
+    th.addEventListener("click",toggle);
+    th.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); toggle(); } });
+  });
+  const pager=document.createElement("div"); pager.className="table-pager"; pager.hidden=true;
+  const prev=document.createElement("button"); prev.type="button"; prev.className="btn secondary"; prev.innerHTML='<i class="fa-solid fa-chevron-left" aria-hidden="true"></i><span>Anterior</span>';
+  const next=document.createElement("button"); next.type="button"; next.className="btn secondary"; next.innerHTML='<span>Siguiente</span><i class="fa-solid fa-chevron-right" aria-hidden="true"></i>';
+  const info=document.createElement("span"); info.className="pager-info";
+  const size=document.createElement("select"); size.setAttribute("aria-label","Registros por página");
+  PAGE_SIZES.forEach(n=>{const o=document.createElement("option");o.value=String(n);o.textContent=n?`${n} por página`:"Ver todos";size.appendChild(o);});
+  prev.addEventListener("click",()=>{st.page--;apply();});
+  next.addEventListener("click",()=>{st.page++;apply();});
+  size.addEventListener("change",()=>{st.size=Number(size.value);st.page=1;apply();});
+  pager.append(prev,info,next,size);
+  wrap.insertAdjacentElement("afterend",pager);
+  const observer=new MutationObserver(()=>{ labelTableCells(table); apply(true); });
+  function apply(fresh=false){
+    observer.disconnect();
+    const rows=[...body.children].filter(tr=>!(tr.children.length===1 && tr.children[0].colSpan>1));
+    if(fresh) rows.forEach((tr,i)=>tr.dataset.oi=String(i));
+    rows.forEach((tr,i)=>{ if(tr.dataset.oi===undefined) tr.dataset.oi=String(i); });
+    const ordered=[...rows].sort((a,b)=>st.col<0?Number(a.dataset.oi)-Number(b.dataset.oi):(compareCells(cellSortValue(a,st.col),cellSortValue(b,st.col))*st.dir||Number(a.dataset.oi)-Number(b.dataset.oi)));
+    ordered.forEach(tr=>body.appendChild(tr));
+    ths.forEach((th,i)=>{ th.classList.toggle("sorted",i===st.col); th.setAttribute("aria-sort",i===st.col?(st.dir===1?"ascending":"descending"):"none"); const ind=th.querySelector(".sort-ind"); if(ind) ind.textContent=i===st.col?(st.dir===1?" ▲":" ▼"):""; });
+    const total=ordered.length;
+    if(fresh && total!==st.lastCount && st.lastCount!==-1) st.page=1;
+    st.lastCount=total;
+    const pages=st.size?Math.max(1,Math.ceil(total/st.size)):1;
+    st.page=Math.min(Math.max(1,st.page),pages);
+    const start=st.size?(st.page-1)*st.size:0, end=st.size?start+st.size:total;
+    ordered.forEach((tr,i)=>{ tr.hidden=i<start||i>=end; });
+    pager.hidden=total<=PAGE_SIZES[0];
+    info.textContent=total?`${start+1}–${Math.min(end,total)} de ${total} · Página ${st.page} de ${pages}`:"";
+    prev.disabled=st.page<=1; next.disabled=st.page>=pages;
+    observer.observe(body,{childList:true});
+  }
+  labelTableCells(table); apply(true);
+}
+["inventoryTableBody","generalInventoryTableBody","movementTableBody","trashTableBody"].forEach(id=>{
+  const body=$(id); if(!body) return;
+  body.closest("table").classList.add("cards-mobile");
+  enhanceTable(body);
+});
+["usersTableBody","accessLogBody"].forEach(id=>{
   const body=$(id); if(!body) return;
   const table=body.closest("table"); table.classList.add("cards-mobile");
   labelTableCells(table);
@@ -2131,7 +2282,12 @@ function labelTableCells(table){
 ["movementSearchName","movementSearchSku","movementSearchSerial","movementDateFrom","movementDateTo","movementType","movementAction","movementSearchDestination","movementSearchUser"].forEach(id=>$(id).addEventListener("input",renderMovements));
 $("clearFiltersBtn").addEventListener("click",()=>{$("generalSearch").value="";$("filterType").value="";$("filterStatus").value="";$("filterCategory").value="";$("filterSpace").value="";renderGeneralInventoryTable()});
 $("clearMovementFiltersBtn").addEventListener("click",()=>{["movementSearchName","movementSearchSku","movementSearchSerial","movementDateFrom","movementDateTo","movementType","movementAction","movementSearchDestination","movementSearchUser"].forEach(id=>$(id).value="");renderMovements()});
-$("estado").addEventListener("change",toggleLocationFields);$("generateSkuBtn").addEventListener("click",generateSku);$("generateConsumableSkuBtn").addEventListener("click",generateConsumableSku);$("scanBtn").addEventListener("click",()=>startScanner("codigo"));$("generalScanBtn").addEventListener("click",()=>startScanner("generalSearch",()=>renderGeneralInventoryTable()));$("closeScannerBtn").addEventListener("click",stopScanner);
+$("estado").addEventListener("change",toggleLocationFields);$("generateSkuBtn").addEventListener("click",generateSku);$("generateConsumableSkuBtn").addEventListener("click",generateConsumableSku);$("scanBtn").addEventListener("click",()=>startScanner("codigo"));$("generalScanBtn").addEventListener("click",()=>startScanner("generalSearch",code=>{
+  renderGeneralInventoryTable();
+  const key=normalizedKey(code);
+  const match=inventario.find(i=>normalizedKey(i.codigo)===key || (i.serial && normalizedKey(i.serial)===key));
+  if(match) setTimeout(()=>openViewModal(match),250);
+}));$("closeScannerBtn").addEventListener("click",stopScanner);
 $("scannerModal").addEventListener("click",e=>{if(e.target===$("scannerModal"))stopScanner()});$("qrModal").addEventListener("click",e=>{if(e.target===$("qrModal"))closeQrModal()});$("closeQrBtn").addEventListener("click",closeQrModal);$("cancelQrBtn").addEventListener("click",closeQrModal);$("downloadQrBtn").addEventListener("click",downloadQrPng);$("orderModal").addEventListener("click",e=>{if(e.target===$("orderModal"))closeOrder()});$("closeOrderModal").addEventListener("click",closeOrder);
 $("movementModal").addEventListener("click",e=>{if(e.target===$("movementModal"))closeMovementModal()});$("closeMovementModal").addEventListener("click",closeMovementModal);$("cancelMovementBtn").addEventListener("click",closeMovementModal);$("movementForm").addEventListener("submit",submitMovement);
 ["orderFecha","orderSolicitante","orderCentroCostos","orderMesDesde","orderMesHasta"].forEach(id=>$(id).addEventListener("input",buildOrderDocument));
@@ -2210,7 +2366,7 @@ startTrashListener();
 onValue(inventarioRef,snapshot=>{const data=snapshot.val()||{};renderizarInventario(Object.entries(data).map(([id,v])=>({...(v||{}),idFirebase:id})));},err=>{setSync("Error de conexión","error");showToast("Firebase rechazó la lectura. Revise las reglas.",true)});
 onValue(movimientosRef,snapshot=>{
   const data=snapshot.val()||{};
-  const rtdbMovements=Object.entries(data).map(([key,m])=>({_key:key,cantidadRevertida:safeInt(m?.cantidadRevertida)??0,refSalida:sanitizeText(m?.refSalida,80),motivo:upperText(m?.motivo,200),idEvento:sanitizeText((m&&m.idEvento)||key,80),fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:upperText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:safeInt(m.cantidad)??0,espacioDestino:upperText(m.espacioDestino,120),usuario:sanitizeText(m.usuario,60)}));
+  const rtdbMovements=Object.entries(data).map(([key,m])=>({_key:key,detalle:sanitizeText(m?.detalle,1000),cantidadRevertida:safeInt(m?.cantidadRevertida)??0,refSalida:sanitizeText(m?.refSalida,80),motivo:upperText(m?.motivo,200),idEvento:sanitizeText((m&&m.idEvento)||key,80),fechaHora:Number(m.fechaHora)||0,tipo:sanitizeText(m.tipo,20),codigo:sanitizeText(m.codigo,LIMITS.codigo),serial:sanitizeText(m.serial,LIMITS.serial),nombre:upperText(m.nombre,LIMITS.nombre),tipoAccion:sanitizeText(m.tipoAccion,40),cantidad:safeInt(m.cantidad)??0,espacioDestino:upperText(m.espacioDestino,120),usuario:sanitizeText(m.usuario,60)}));
   const firestoreMovements=movimientos.filter(m=>m.__firestore===true);
   movimientos=[...rtdbMovements,...firestoreMovements].filter((m,index,arr)=>!m.idEvento || arr.findIndex(x=>x.idEvento===m.idEvento)===index);
   renderMovements();renderInventoryTable();renderGeneralInventoryTable();renderAnalytics();
@@ -2233,6 +2389,36 @@ signInAnonymously(getAuth(app))
     showToast("Active el inicio de sesión Anónimo en Firebase Authentication para proteger la base de datos.",true);
   })
   .finally(()=>initAuth(db,startRealtime));
+document.querySelectorAll(".dash-kpi").forEach(k=>k.addEventListener("click",()=>{
+  if(k.dataset.filter){ alertFilter=k.dataset.filter; renderCriticals(); }
+  activateTab(k.dataset.go); window.scrollTo({top:0});
+  document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.tab===k.dataset.go));
+}));
+
+/* Aviso de conexión con Firebase */
+let connState={connected:null,everConnected:false,timer:null,hideTimer:null};
+function showConnBanner(kind,text){
+  const b=$("connectionBanner"); clearTimeout(connState.hideTimer);
+  b.className=`connection-banner ${kind}`; $("connectionText").textContent=text; b.hidden=false;
+  if(kind==="online") connState.hideTimer=setTimeout(()=>{b.hidden=true;},3500);
+}
+function setConnected(isOn){
+  if(connState.connected===isOn) return;
+  connState.connected=isOn; clearTimeout(connState.timer);
+  if(isOn){
+    if(connState.everConnected && !$("connectionBanner").hidden) showConnBanner("online","Conexión restablecida. Los cambios se están sincronizando.");
+    else $("connectionBanner").hidden=true;
+    connState.everConnected=true;
+    setSync("Sincronizado en tiempo real","ok");
+  } else {
+    connState.timer=setTimeout(()=>{
+      if(connState.connected===false){ showConnBanner("offline","Sin conexión. Los cambios no se guardarán hasta que vuelva el internet."); setSync("Sin conexión","error"); }
+    },connState.everConnected?2000:6000);
+  }
+}
+onValue(ref(db,".info/connected"),snap=>setConnected(snap.val()===true));
+window.addEventListener("offline",()=>setConnected(false));
+
 document.querySelectorAll(".maint-chip").forEach(chip=>chip.addEventListener("click",()=>{
   $("maintDate").value=addMonthsInput(Number(chip.dataset.months));
   document.querySelectorAll(".maint-chip").forEach(c=>c.classList.toggle("active",c===chip));

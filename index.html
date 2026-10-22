@@ -8,6 +8,12 @@
   <meta http-equiv="Permissions-Policy" content="camera=(self)">
   <title>Sistema de Gestión de Inventario</title>
   <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#0b1736">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Inventario TI">
+  <link rel="apple-touch-icon" href="assets/icon-192.png">
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
@@ -21,6 +27,8 @@
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body class="auth-locked">
+  <div id="connectionBanner" class="connection-banner" role="status" aria-live="polite" hidden><i class="fa-solid fa-wifi" aria-hidden="true"></i><span id="connectionText"></span></div>
+
   <div id="authScreen" class="auth-screen">
     <button type="button" class="auth-theme-btn" data-theme-toggle title="Cambiar tema" aria-label="Cambiar tema"><i class="fa-solid fa-moon" aria-hidden="true"></i></button>
     <form id="loginCard" class="auth-card" novalidate hidden>
@@ -71,7 +79,8 @@
       </div>
 
       <nav class="tabs" aria-label="Módulos del sistema">
-        <button class="tab active" type="button" data-tab="activos"><i class="fa-solid fa-laptop" aria-hidden="true"></i><span class="tab-label">Activos</span></button>
+        <button class="tab active" type="button" data-tab="inicio"><i class="fa-solid fa-gauge-high" aria-hidden="true"></i><span class="tab-label">Inicio</span></button>
+        <button class="tab" type="button" data-tab="activos"><i class="fa-solid fa-laptop" aria-hidden="true"></i><span class="tab-label">Activos</span></button>
         <button class="tab" type="button" data-tab="consumibles"><i class="fa-solid fa-box-archive" aria-hidden="true"></i><span class="tab-label">Consumibles</span></button>
         <button class="tab" type="button" data-tab="general"><i class="fa-solid fa-list-check" aria-hidden="true"></i><span class="tab-label">Inventario General</span></button>
         <button class="tab" type="button" data-tab="alertas"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span class="tab-label">Alertas</span><span id="criticalBadge" class="badge">0</span></button>
@@ -112,7 +121,24 @@
         </div>
       </header>
 
-      <section id="activos" class="panel active">
+      <section id="inicio" class="panel active">
+        <div class="panel-head"><div><h2>Panel de inicio</h2><p>Resumen en tiempo real del inventario.</p></div></div>
+        <div class="dash-kpis">
+          <button type="button" class="dash-kpi" data-go="activos"><span>Activos</span><strong id="dashAssets">0</strong><small id="dashAssetsSub">—</small></button>
+          <button type="button" class="dash-kpi" data-go="consumibles"><span>Consumibles</span><strong id="dashCons">0</strong><small id="dashConsSub">—</small></button>
+          <button type="button" class="dash-kpi" data-go="alertas" data-filter="critical"><span>Alertas críticas</span><strong id="dashCritical">0</strong><small>Consumibles en o bajo el mínimo</small></button>
+          <button type="button" class="dash-kpi" data-go="alertas" data-filter="maintenance"><span>Mantenimientos</span><strong id="dashMaint">0</strong><small id="dashMaintSub">Vencidos o próximos 15 días</small></button>
+        </div>
+        <div class="dash-grid">
+          <article class="dash-card dash-wide"><h3>Consumo de consumibles · últimos 6 meses</h3><p class="dash-note">Unidades salidas por mes (descontando reversiones).</p><div id="dashConsumption" class="vbar-chart" role="img"></div></article>
+          <article class="dash-card"><h3>Activos por estado</h3><div id="dashByState" class="hbar-chart"></div></article>
+          <article class="dash-card"><h3>Activos por categoría</h3><div id="dashByCategory" class="hbar-chart"></div></article>
+          <article class="dash-card"><h3>Mantenimientos próximos (30 días)</h3><div id="dashMaintList" class="dash-list"></div></article>
+          <article class="dash-card"><h3>Últimos movimientos</h3><div id="dashLastMoves" class="dash-list"></div></article>
+        </div>
+      </section>
+
+      <section id="activos" class="panel">
         <div class="summary-grid" aria-label="Resumen de activos"><article class="summary-card"><span>Total activos</span><strong id="summaryTotal">0</strong></article><article class="summary-card"><span>Disponibles</span><strong id="summaryAvailable">0</strong></article><article class="summary-card"><span>Asignados</span><strong id="summaryAssigned">0</strong></article><article class="summary-card"><span>En mantenimiento</span><strong id="summaryMaintenance">0</strong></article></div>
         <div class="panel-head">
           <div><h2>Gestión de Activos Fijos</h2><p>Registre equipos, periféricos y demás activos institucionales.</p></div>
@@ -501,5 +527,10 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script type="module" src="js/app.js"></script>
+  <script>
+    if ("serviceWorker" in navigator && location.protocol !== "file:") {
+      window.addEventListener("load", function () { navigator.serviceWorker.register("sw.js").catch(function (e) { console.warn("Service worker no registrado", e); }); });
+    }
+  </script>
 </body>
 </html>
